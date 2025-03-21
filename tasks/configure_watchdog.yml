@@ -17,6 +17,15 @@
     mode: '0755'
   tags: watchdog
 
+- name: Create network-watchdog environment file
+  template:
+    src: network-watchdog.env.j2
+    dest: /etc/sysconfig/network-watchdog
+    owner: root
+    group: root
+    mode: '0644'
+  tags: watchdog
+
 - name: Enable and start watchdog service
   systemd:
     name: watchdog
@@ -27,6 +36,32 @@
 - name: Set up cron job for network-watchdog
   cron:
     name: "network watchdog"
-    job: "/usr/local/bin/network-watchdog.sh"
+    job: ". /etc/sysconfig/network-watchdog && /usr/local/bin/network-watchdog.sh"
     minute: "*"
+  tags: watchdog
+
+- name: Create watchdog systemd service file
+  template:
+    src: network-watchdog.service.j2
+    dest: /etc/systemd/system/network-watchdog.service
+    owner: root
+    group: root
+    mode: '0644'
+  tags: watchdog
+
+- name: Create watchdog systemd timer file
+  template:
+    src: network-watchdog.timer.j2
+    dest: /etc/systemd/system/network-watchdog.timer
+    owner: root
+    group: root
+    mode: '0644'
+  tags: watchdog
+
+- name: Enable and start watchdog timer
+  systemd:
+    name: network-watchdog.timer
+    enabled: yes
+    state: started
+    daemon_reload: yes
   tags: watchdog
