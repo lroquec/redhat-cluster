@@ -1,0 +1,16 @@
+[Unit]
+Description=Servicio de ejemplo para clúster HA
+After=network.target
+
+[Service]
+Type=forking
+User={{ app_user }}
+Group={{ app_group }}
+ExecStart={{ app_start_script }}
+ExecStop={{ app_stop_script }}
+PIDFile={{ app_pid_file }}
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

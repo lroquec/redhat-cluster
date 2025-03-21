@@ -1,0 +1,48 @@
+---
+# Configuración del clúster
+cluster_name: "ha_cluster"
+cluster_user: "hacluster"
+cluster_password: "clusterpass"  # Cambiar esto o usar vault
+
+# Nodos del clúster
+cluster_nodes:
+  - name: "node1"
+    hostname: "node1"
+    ip: "192.168.6.35"
+  - name: "node2"
+    hostname: "node2"
+    ip: "192.168.6.36"
+
+# IP flotante
+virtual_ip: "192.168.6.37"
+virtual_ip_cidr: "22"
+virtual_ip_interface: "ens18"  # Cambiar a la interfaz adecuada
+
+# Configuración de NFS
+nfs_server: "192.168.4.36"
+nfs_share: "/var/lib/vz/nfs-export"
+mount_point: "/opt/nfs-shared"
+
+# Configuración de servicio ejemplo
+app_service_name: "myapp"
+app_user: "appuser"
+app_group: "appgroup"
+app_start_script: "/opt/myapp/bin/start.sh"
+app_stop_script: "/opt/myapp/bin/stop.sh"
+app_status_script: "/opt/myapp/bin/status.sh"
+app_pid_file: "/var/run/myapp.pid"
+
+# Configuración de watchdog
+watchdog_device: "/dev/watchdog"
+watchdog_interval: "10"
+
+# Configuración de monitoreo de recursos
+resource_monitor_interval: "30s"
+ip_monitor_interval: "10s"
+fs_monitor_interval: "20s"
+
+# Puertos a abrir en el firewall
+firewall_services:
+  - high-availability
+  - https
+  - http

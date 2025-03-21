@@ -1,0 +1,13 @@
+[Unit]
+Description=Spawner Service
+After=network.target {{ tomcat_service_name }}.service
+
+[Service]
+Type=simple
+User={{ spawner_user }}
+ExecStart={{ spawner_start_script }}
+ExecStop={{ spawner_stop_script }}
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,139 @@
+# In both servers
+
+# Update servers
+sudo dnf update -y
+
+# Configure /etc/hosts
+vi /etc/hosts
+
+192.168.6.35 node1
+192.168.6.36 node2
+192.168.6.37 virtual-ip
+
+# Configure firewall
+sudo firewall-cmd --permanent --add-service=high-availability
+sudo firewall-cmd --reload
+
+# Install software
+dnf install -y pcs pacemaker resource-agents watchdog
+
+# Set password
+passwd hacluster
+
+# Enable pcsd service
+systemctl enable --now pcsd
+
+# Auth nodes
+pcs host auth node1 node2 -u hacluster
+
+# Create cluster from node1
+pcs cluster setup ha_cluster node1 node2
+
+# Start cluster on both
+pcs cluster enable --all
+pcs cluster start --all
+
+# Configure NFS
+dnf install -y nfs-utils
+
+# Create nfs mount
+mkdir -p /ruta/instalacion/application
+
+# Load watchdog module
+sudo modprobe softdog
+echo "softdog" | sudo tee -a /etc/modules-load.d/softdog.conf
+
+# Configure watchdog
+vi /etc/watchdog.conf
+
+watchdog-device = /dev/watchdog
+interval = 10
+realtime = yes
+priority = 1
+
+# Enable watchdog service
+systemctl enable --now watchdog
+
+# Create fencing script for watchdog
+vi /usr/local/bin/network-watchdog.sh
+
+# Make script executable
+chmod +x /usr/local/bin/network-watchdog.sh
+
+# Create cron
+(crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/network-watchdog.sh") | crontab -
+
+# Configure cluster resources
+pcs property set stonith-enabled=false
+pcs property set no-quorum-policy=ignore
+pcs resource defaults migration-threshold=3
+pcs resource defaults failure-timeout=60s
+
+# Create VIP
+pcs resource create virtual_ip IPaddr2 ip=192.168.6.37 cidr_netmask=22 nic=ens18 op monitor interval=10s
+
+# Create resource for NFS
+pcs resource create fs_shared Filesystem device="servidor_nfs:/ruta/compartida" directory="/ruta/instalacion/application" fstype="nfs" options="noatime,sync" op monitor interval=20s
+
+# Create systemd services files for apps to watch
+vi /etc/systemd/system/tomcat.service
+
+sudo systemctl daemon-reload
+
+# Create resources for apps
+pcs resource create tomcat_service systemd:tomcat op monitor interval=30s
+pcs resource create spawner_service systemd:spawner op monitor interval=30s
+
+# Create restrictions of order and colocation
+# Orden de startup: IP -> Filesystem -> Tomcat -> Spawner
+pcs constraint order virtual_ip then fs_shared
+pcs constraint order fs_shared then tomcat_service
+pcs constraint order tomcat_service then spawner_service
+
+# Make sure all resources run at the same node
+pcs constraint colocation add fs_shared with virtual_ip INFINITY
+pcs constraint colocation add tomcat_service with fs_shared INFINITY
+pcs constraint colocation add spawner_service with tomcat_service INFINITY
+
+----
+# Test
+# Simulate failure active node
+pcs node standby node1
+
+# Verify resources in the other node
+pcs status
+
+# Put back node online
+pcs node unstandby node1
+
+# Check watchdog script logs
+journalctl | grep watchdog
+
+# Test system by rebooting active node
+reboot
+
+# Useful commands
+
+# Cluster status
+pcs status
+
+# Cleanup resources counters
+pcs resource cleanup
+
+# Delete resource
+pcs resource delete virtual_ip
+
+# See cluster config
+pcs config
+
+# Put node on maintenance
+pcs node maintenance node1
+
+# Remove node from maintenance
+pcs node unmaintenance node1
+
+# Stop the cluster
+pcs cluster stop --all
+
+# Start the cluster
+pcs cluster start --all

@@ -1,0 +1,111 @@
+---
+# Tareas para crear un servicio de prueba simple
+- name: Asegurar que el grupo de aplicación existe
+  group:
+    name: "{{ app_group }}"
+    state: present
+    system: yes
+  tags: test_service
+
+- name: Asegurar que el usuario de aplicación existe
+  user:
+    name: "{{ app_user }}"
+    group: "{{ app_group }}"
+    system: yes
+    create_home: no
+    state: present
+  tags: test_service
+
+- name: Crear directorio para la aplicación de prueba
+  file:
+    path: "/opt/{{ app_service_name }}/bin"
+    state: directory
+    mode: '0755'
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+  tags: test_service
+
+- name: Crear directorio para logs
+  file:
+    path: "/var/log/{{ app_service_name }}"
+    state: directory
+    mode: '0755'
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+  tags: test_service
+
+- name: Crear script de inicio del servicio de prueba
+  copy:
+    content: |
+      #!/bin/bash
+      # Script para iniciar el servicio de ejemplo
+      
+      PID_FILE="{{ app_pid_file }}"
+      LOG_FILE="/var/log/{{ app_service_name }}/service.log"
+      
+      # Crear directorio de logs si no existe
+      mkdir -p /var/log/{{ app_service_name }}
+      
+      # Escribir en el log
+      echo "$(date): Iniciando servicio de prueba {{ app_service_name }}..." >> $LOG_FILE
+      
+      # Iniciar un proceso simple en segundo plano
+      while true; do
+          echo "$(date): Servicio {{ app_service_name }} en ejecución" >> $LOG_FILE
+          sleep 30
+      done &
+      
+      # Guardar el PID
+      echo $! > $PID_FILE
+      chmod 644 $PID_FILE
+      
+      echo "Servicio iniciado con PID $(cat $PID_FILE)"
+      exit 0
+    dest: "{{ app_start_script }}"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0755'
+  tags: test_service
+
+- name: Crear script de parada del servicio de prueba
+  copy:
+    content: |
+      #!/bin/bash
+      # Script para detener el servicio de ejemplo
+      
+      PID_FILE="{{ app_pid_file }}"
+      LOG_FILE="/var/log/{{ app_service_name }}/service.log"
+      
+      if [ -f "$PID_FILE" ]; then
+          PID=$(cat $PID_FILE)
+          echo "$(date): Deteniendo servicio con PID $PID..." >> $LOG_FILE
+          
+          # Verificar si el proceso existe
+          if ps -p $PID > /dev/null; then
+              kill $PID
+              echo "$(date): Servicio detenido." >> $LOG_FILE
+          else
+              echo "$(date): El proceso no existe." >> $LOG_FILE
+          fi
+          
+          # Eliminar archivo PID
+          rm -f $PID_FILE
+      else
+          echo "$(date): Archivo PID no encontrado." >> $LOG_FILE
+      fi
+      
+      exit 0
+    dest: "{{ app_stop_script }}"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: '0755'
+  tags: test_service
+
+- name: Asegurar que el directorio PID existe con permisos correctos
+  file:
+    path: "{{ app_pid_file | dirname }}"
+    state: directory
+    mode: '0755'
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+  tags: test_service

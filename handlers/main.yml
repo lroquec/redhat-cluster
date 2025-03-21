@@ -1,0 +1,10 @@
+---
+- name: restart cluster
+  shell: pcs cluster stop --all && pcs cluster start --all
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+
+- name: restart watchdog
+  systemd:
+    name: watchdog
+    state: restarted

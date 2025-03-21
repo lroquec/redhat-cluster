@@ -1,0 +1,33 @@
+---
+- name: Install required packages
+  dnf:
+    name:
+      - pcs
+      - pacemaker
+      - resource-agents
+      - nfs-utils
+      - watchdog
+    state: present
+  tags: packages
+
+- name: Load softdog module
+  modprobe:
+    name: softdog
+    state: present
+  tags: watchdog
+
+- name: Ensure softdog module loads at boot
+  copy:
+    content: "softdog\n"
+    dest: /etc/modules-load.d/softdog.conf
+    owner: root
+    group: root
+    mode: '0644'
+  tags: watchdog
+
+- name: Enable and start pcsd service
+  systemd:
+    name: pcsd
+    enabled: yes
+    state: started
+  tags: services

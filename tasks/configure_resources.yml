@@ -1,0 +1,138 @@
+---
+# - name: Create tomcat service file
+#   template:
+#     src: tomcat.service.j2
+#     dest: /etc/systemd/system/{{ tomcat_service_name }}.service
+#     owner: root
+#     group: root
+#     mode: '0644'
+#   tags: services
+
+# - name: Create spawner service file
+#   template:
+#     src: spawner.service.j2
+#     dest: /etc/systemd/system/{{ spawner_service_name }}.service
+#     owner: root
+#     group: root
+#     mode: '0644'
+#   tags: services
+
+- name: Create application service file
+  template:
+    src: myapp.service.j2
+    dest: /etc/systemd/system/{{ app_service_name }}.service
+    owner: root
+    group: root
+    mode: '0644'
+  tags: services
+
+- name: Create application user and group
+  user:
+    name: "{{ app_user }}"
+    group: "{{ app_group }}"
+    system: yes
+    create_home: no
+    state: present
+  tags: services
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+  tags: services
+
+- name: Create virtual IP resource
+  shell: pcs resource create virtual_ip IPaddr2 ip={{ virtual_ip }} cidr_netmask={{ virtual_ip_cidr }} nic={{ virtual_ip_interface }} op monitor interval={{ ip_monitor_interval }} --disabled
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  register: create_ip
+  failed_when: create_ip.rc != 0 and "already exists" not in create_ip.stderr
+  changed_when: create_ip.rc == 0
+  tags: resources
+
+- name: Create filesystem resource
+  shell: pcs resource create fs_shared Filesystem device={{ nfs_server }}:{{ nfs_share }} directory={{ mount_point }} fstype=nfs options="noatime,sync" op monitor interval={{ fs_monitor_interval }}
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  register: create_fs
+  failed_when: create_fs.rc != 0 and "already exists" not in create_fs.stderr
+  changed_when: create_fs.rc == 0
+  tags: resources
+
+- name: Create application service resource
+  shell: pcs resource create app_service systemd:{{ app_service_name }} op monitor interval={{ resource_monitor_interval }}
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  register: create_app
+  failed_when: create_app.rc != 0 and "already exists" not in create_app.stderr
+  changed_when: create_app.rc == 0
+  tags: resources
+
+- name: Set order constraints
+  shell: |
+    pcs constraint order virtual_ip then fs_shared --force
+    pcs constraint order fs_shared then app_service --force
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  changed_when: false
+  tags: constraints
+
+- name: Set colocation constraints
+  shell: |
+    pcs constraint colocation add fs_shared with virtual_ip INFINITY --force
+    pcs constraint colocation add app_service with fs_shared INFINITY --force
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  changed_when: false
+  tags: constraints
+
+- name: Habilitar todos los recursos después de la configuración
+  shell: pcs resource enable virtual_ip fs_shared app_service
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  ignore_errors: yes
+  tags: resources
+
+- name: Limpiar estado de recursos
+  shell: pcs resource cleanup
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  ignore_errors: yes
+  tags: resources
+
+# - name: Create tomcat service resource
+#   shell: pcs resource create tomcat_service systemd:{{ tomcat_service_name }} op monitor interval={{ resource_monitor_interval }}
+#   run_once: true
+#   delegate_to: "{{ cluster_nodes[0].hostname }}"
+#   register: create_tomcat
+#   failed_when: create_tomcat.rc != 0 and "already exists" not in create_tomcat.stderr
+#   changed_when: create_tomcat.rc == 0
+#   tags: resources
+
+# - name: Create spawner service resource
+#   shell: pcs resource create spawner_service systemd:{{ spawner_service_name }} op monitor interval={{ resource_monitor_interval }}
+#   run_once: true
+#   delegate_to: "{{ cluster_nodes[0].hostname }}"
+#   register: create_spawner
+#   failed_when: create_spawner.rc != 0 and "already exists" not in create_spawner.stderr
+#   changed_when: create_spawner.rc == 0
+#   tags: resources
+
+# - name: Set order constraints
+#   shell: |
+#     pcs constraint order virtual_ip then fs_shared
+#     pcs constraint order fs_shared then tomcat_service
+#     pcs constraint order tomcat_service then spawner_service
+#   run_once: true
+#   delegate_to: "{{ cluster_nodes[0].hostname }}"
+#   changed_when: false
+#   tags: constraints
+
+# - name: Set colocation constraints
+#   shell: |
+#     pcs constraint colocation add fs_shared with virtual_ip INFINITY
+#     pcs constraint colocation add tomcat_service with fs_shared INFINITY
+#     pcs constraint colocation add spawner_service with tomcat_service INFINITY
+#   run_once: true
+#   delegate_to: "{{ cluster_nodes[0].hostname }}"
+#   changed_when: false
+#   tags: constraints

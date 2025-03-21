@@ -1,0 +1,6 @@
+---
+- name: Set up High Availability Cluster
+  hosts: cluster_nodes
+  become: yes
+  roles:
+    - redhat-cluster

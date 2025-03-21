@@ -1,0 +1,13 @@
+---
+- name: Check cluster status
+  shell: pcs status
+  register: cluster_status
+  changed_when: false
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  tags: validate
+
+- name: Display cluster status
+  debug:
+    var: cluster_status.stdout_lines
+  tags: validate

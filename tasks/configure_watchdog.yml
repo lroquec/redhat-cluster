@@ -1,0 +1,32 @@
+---
+- name: Configure watchdog service
+  template:
+    src: watchdog.conf.j2
+    dest: /etc/watchdog.conf
+    owner: root
+    group: root
+    mode: '0644'
+  tags: watchdog
+
+- name: Copy network-watchdog script
+  copy:
+    src: network-watchdog.sh
+    dest: /usr/local/bin/network-watchdog.sh
+    owner: root
+    group: root
+    mode: '0755'
+  tags: watchdog
+
+- name: Enable and start watchdog service
+  systemd:
+    name: watchdog
+    enabled: yes
+    state: started
+  tags: watchdog
+
+- name: Set up cron job for network-watchdog
+  cron:
+    name: "network watchdog"
+    job: "/usr/local/bin/network-watchdog.sh"
+    minute: "*"
+  tags: watchdog

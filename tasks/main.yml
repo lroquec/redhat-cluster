@@ -1,0 +1,28 @@
+---
+- name: Include preparation tasks
+  include_tasks: prepare.yml
+  tags: prepare
+
+- name: Include installation tasks
+  include_tasks: install.yml
+  tags: install
+
+- name: Include cluster configuration tasks
+  include_tasks: configure_cluster.yml
+  tags: configure
+
+- name: Include test service tasks
+  include_tasks: test_service.yml
+  tags: test_service
+
+- name: Include watchdog configuration tasks
+  include_tasks: configure_watchdog.yml
+  tags: watchdog
+
+- name: Include resource configuration tasks
+  include_tasks: configure_resources.yml
+  tags: resources
+
+- name: Include validation tasks
+  include_tasks: validate.yml
+  tags: validate

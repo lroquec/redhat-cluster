@@ -1,0 +1,57 @@
+---
+- name: Set password for hacluster user
+  user:
+    name: "{{ cluster_user }}"
+    password: "{{ cluster_password | password_hash('sha512') }}"
+    update_password: always
+  tags: users
+
+- name: Authenticate nodes
+  shell: pcs host auth {% for node in cluster_nodes %}{{ node.hostname }} {% endfor %} -u {{ cluster_user }} -p {{ cluster_password }}
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  changed_when: false
+  tags: auth
+
+- name: Setup cluster
+  shell: pcs cluster setup {{ cluster_name }} {% for node in cluster_nodes %}{{ node.hostname }} {% endfor %}
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  args:
+    creates: /etc/corosync/corosync.conf
+  tags: setup
+
+- name: Start cluster on all nodes
+  shell: pcs cluster start --all
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  changed_when: false
+  tags: start
+
+- name: Enable cluster on all nodes
+  shell: pcs cluster enable --all
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  changed_when: false
+  tags: enable
+
+- name: Set cluster properties
+  shell: pcs property set stonith-enabled=false
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  changed_when: false
+  tags: properties
+
+- name: Set no-quorum-policy
+  shell: pcs property set no-quorum-policy=ignore
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  changed_when: false
+  tags: properties
+
+- name: Set resource defaults
+  shell: pcs resource defaults migration-threshold=3
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  changed_when: false
+  tags: properties
