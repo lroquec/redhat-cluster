@@ -1,7 +1,7 @@
 # inventory.ini
 [cluster_nodes]
-node1 ansible_host=192.168.6.35
-node2 ansible_host=192.168.6.36
+node1 ansible_host=192.168.6.39
+node2 ansible_host=192.168.6.41
 
 [all:vars]
 ansible_user=root
