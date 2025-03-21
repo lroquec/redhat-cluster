@@ -3,5 +3,8 @@
 
 {% for node in cluster_nodes %}
 {{ node.ip }} {{ node.hostname }}
+{% if node.mgmt_ip | default('') | length > 0 %}
+{{ node.mgmt_ip }} {{ node.hostname }}-mgmt
+{% endif %}
 {% endfor %}
 {{ virtual_ip }} virtual-ip
