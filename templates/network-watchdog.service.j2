@@ -1,0 +1,10 @@
+[Unit]
+Description=Cluster Network Watchdog Service
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/network-watchdog.sh
+
+[Install]
+WantedBy=multi-user.target
