@@ -1,29 +1,35 @@
 ---
-# Configuración del clúster
+# Cluster configuration
 cluster_name: "ha_cluster"
 cluster_user: "hacluster"
-cluster_password: "clusterpass"  # Cambiar esto o usar vault
+cluster_password: "clusterpass"  # Change this or use vault
 
-# Nodos del clúster
+# Cluster nodes
 cluster_nodes:
   - name: "node1"
     hostname: "node1"
-    ip: "192.168.6.35"
+    ip: "192.168.6.39"
+    mgmt_ip: "10.0.0.1"  # Additional management IP - optional
   - name: "node2"
     hostname: "node2"
-    ip: "192.168.6.36"
+    ip: "192.168.6.41"
+    mgmt_ip: "10.0.0.2"  # Additional management IP - optional
 
-# IP flotante
+# Floating IP
 virtual_ip: "192.168.6.37"
 virtual_ip_cidr: "22"
-virtual_ip_interface: "ens18"  # Cambiar a la interfaz adecuada
+virtual_ip_interface: "enp6s18"  # Change to the appropriate interface
 
-# Configuración de NFS
+# Additional network configuration for checks
+check_management_network: false  # Enable management network checks
+management_network_interface: "enp6s19"  # Management network interface
+
+# NFS configuration
 nfs_server: "192.168.4.36"
 nfs_share: "/var/lib/vz/nfs-export"
 mount_point: "/opt/nfs-shared"
 
-# Configuración de servicio ejemplo
+# Example service configuration
 app_service_name: "myapp"
 app_user: "appuser"
 app_group: "appgroup"
@@ -32,17 +38,16 @@ app_stop_script: "/opt/myapp/bin/stop.sh"
 app_status_script: "/opt/myapp/bin/status.sh"
 app_pid_file: "/var/run/myapp.pid"
 
-# Configuración de watchdog
+# Watchdog configuration
 watchdog_device: "/dev/watchdog"
 watchdog_interval: "10"
 
-# Configuración de monitoreo de recursos
+# Resource monitoring configuration
 resource_monitor_interval: "30s"
 ip_monitor_interval: "10s"
 fs_monitor_interval: "20s"
 
-# Puertos a abrir en el firewall
+# Ports to open in the firewall
 firewall_services:
   - high-availability
   - https
-  - http
