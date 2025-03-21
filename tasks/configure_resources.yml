@@ -17,6 +17,7 @@
 #     mode: '0644'
 #   tags: services
 
+---
 - name: Create application service file
   template:
     src: myapp.service.j2
@@ -67,6 +68,15 @@
   changed_when: create_app.rc == 0
   tags: resources
 
+- name: Create crond service resource as clone
+  shell: pcs resource create crond_service systemd:crond op monitor interval=30s && pcs resource clone crond_service
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  register: create_crond
+  failed_when: create_crond.rc != 0 and "already exists" not in create_crond.stderr
+  changed_when: create_crond.rc == 0
+  tags: resources
+
 - name: Set order constraints
   shell: |
     pcs constraint order virtual_ip then fs_shared --force
@@ -85,14 +95,14 @@
   changed_when: false
   tags: constraints
 
-- name: Habilitar todos los recursos después de la configuración
+- name: Enable resources in cluster
   shell: pcs resource enable virtual_ip fs_shared app_service
   run_once: true
   delegate_to: "{{ cluster_nodes[0].hostname }}"
   ignore_errors: yes
   tags: resources
 
-- name: Limpiar estado de recursos
+- name: Cleanup resources
   shell: pcs resource cleanup
   run_once: true
   delegate_to: "{{ cluster_nodes[0].hostname }}"
