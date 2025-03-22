@@ -17,7 +17,6 @@
 #     mode: '0644'
 #   tags: services
 
----
 - name: Create application service file
   template:
     src: myapp.service.j2
@@ -66,15 +65,6 @@
   register: create_app
   failed_when: create_app.rc != 0 and "already exists" not in create_app.stderr
   changed_when: create_app.rc == 0
-  tags: resources
-
-- name: Create crond service resource as clone
-  shell: pcs resource create crond_service systemd:crond op monitor interval=30s && pcs resource clone crond_service
-  run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
-  register: create_crond
-  failed_when: create_crond.rc != 0 and "already exists" not in create_crond.stderr
-  changed_when: create_crond.rc == 0
   tags: resources
 
 - name: Set order constraints
