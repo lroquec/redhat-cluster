@@ -11,9 +11,9 @@
   include_tasks: configure_cluster.yml
   tags: configure
 
-- name: Include test service tasks
-  include_tasks: test_service.yml
-  tags: test_service
+- name: Include STONITH configuration tasks
+  include_tasks: configure_stonith.yml
+  tags: stonith
 
 - name: Include watchdog configuration tasks
   include_tasks: configure_watchdog.yml
@@ -22,6 +22,10 @@
 - name: Include resource configuration tasks
   include_tasks: configure_resources.yml
   tags: resources
+
+- name: Include test service tasks
+  include_tasks: test_service.yml
+  tags: test_service
 
 - name: Include validation tasks
   include_tasks: validate.yml
