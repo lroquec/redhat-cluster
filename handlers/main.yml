@@ -8,3 +8,8 @@
   systemd:
     name: watchdog
     state: restarted
+
+- name: restart kdump
+  systemd:
+    name: kdump
+    state: restarted
