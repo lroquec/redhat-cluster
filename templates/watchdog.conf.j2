@@ -2,3 +2,7 @@ watchdog-device = {{ watchdog_device }}
 interval = {{ watchdog_interval }}
 realtime = yes
 priority = 1
+
+# Monitor arbitrator heartbeat file for changes
+file = {{ watchdog_heartbeat_file }}
+change = {{ watchdog_heartbeat_change }}
