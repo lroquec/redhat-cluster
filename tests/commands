@@ -15,7 +15,7 @@ sudo firewall-cmd --permanent --add-service=high-availability
 sudo firewall-cmd --reload
 
 # Install software
-dnf install -y pcs pacemaker resource-agents watchdog
+dnf install -y pcs pacemaker resource-agents watchdog fence-agents kexec-tools kdump-tools nfs-utils nmap-ncat 
 
 # Set password
 passwd hacluster
@@ -39,6 +39,13 @@ dnf install -y nfs-utils
 # Create nfs mount
 mkdir -p /ruta/instalacion/application
 
+# Create nfs witness directory
+mkdir -p /opt/nfs-witness
+mount -t nfs servidor_nfs:/ruta/compartida /opt/nfs-witness
+
+# Create directory for heartbeat in nfs
+mkdir -p /opt/nfs-witness/witness
+
 # Load watchdog module
 sudo modprobe softdog
 echo "softdog" | sudo tee -a /etc/modules-load.d/softdog.conf
@@ -51,23 +58,40 @@ interval = 10
 realtime = yes
 priority = 1
 
+file = {{ watchdog_heartbeat_file }}
+change = {{ watchdog_heartbeat_change }}
+
 # Enable watchdog service
 systemctl enable --now watchdog
 
-# Create fencing script for watchdog
+# Create script for watchdog
 vi /usr/local/bin/network-watchdog.sh
 
 # Make script executable
 chmod +x /usr/local/bin/network-watchdog.sh
 
-# Create cron
-(crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/network-watchdog.sh") | crontab -
+# Create script for stonith
+vi /usr/local/bin/fence-watchdog.sh
+
+# Make script executable
+chmod +x /usr/local/bin/fence-watchdog.sh
 
 # Configure cluster resources
-pcs property set stonith-enabled=false
 pcs property set no-quorum-policy=ignore
 pcs resource defaults migration-threshold=3
 pcs resource defaults failure-timeout=60s
+
+pcs stonith create fence-kdump fence_kdump pcmk_host_list="node1,node2" ipport=7410 action="reboot" pcmk_reboot_timeout=120s
+
+# Uncomment the following line to enable the stonith agent
+vi /etc/kdump.conf
+
+fence_kdump_args -p 7410
+fence_kdump_nodes node1 node2
+
+systemctl restart kdump
+
+pcs property set stonith-enabled=true
 
 # Create VIP
 pcs resource create virtual_ip IPaddr2 ip=192.168.6.37 cidr_netmask=22 nic=ens18 op monitor interval=10s
