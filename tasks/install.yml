@@ -8,6 +8,8 @@
       - nfs-utils
       - watchdog
       - netcat
+      - nmap-ncat
+      - kexec-tools
     state: present
   tags: packages
 
