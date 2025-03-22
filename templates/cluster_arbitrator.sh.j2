@@ -16,6 +16,11 @@
 #   - If NFS is not accessible for more than {{ watchdog_standby_nfs_failure_threshold }} seconds, the node reboots.
 #
 
+# Create and set permissions for heartbeat file
+touch /var/run/arbitrator-heartbeat
+chmod 644 /var/run/arbitrator-heartbeat
+chcon -t watchdog_t /var/run/arbitrator-heartbeat 2>/dev/null || true
+
 # Configuration variables
 LOG_FILE="/var/log/cluster_arbitrator.log"
 NFS_WITNESS_DIR="{{ watchdog_nfs_witness_dir }}"       # NFS mount used as witness directory
