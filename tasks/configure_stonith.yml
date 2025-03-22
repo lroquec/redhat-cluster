@@ -1,0 +1,48 @@
+---
+# Simple STONITH configuration with fence_kdump
+
+- name: Install kdump packages
+  dnf:
+    name:
+      - kexec-tools
+      - fence-agents-kdump
+    state: present
+  tags: stonith
+
+- name: Configure kdump.conf
+  lineinfile:
+    path: /etc/kdump.conf
+    regexp: "^#?{{ item.option }}"
+    line: "{{ item.option }}"
+    state: present
+  with_items:
+    - { option: "fence_kdump_args -p 7410" }
+    - { option: "fence_kdump_nodes {{ cluster_nodes | map(attribute='hostname') | join(' ') }}" }
+  notify: restart kdump
+  tags: stonith
+
+- name: Enable and start kdump service
+  systemd:
+    name: kdump
+    state: started
+    enabled: yes
+  tags: stonith
+
+- name: Create STONITH resource with fence_kdump
+  shell: >
+    pcs stonith create fence-kdump fence_kdump 
+    pcmk_host_list="{{ cluster_nodes | map(attribute='hostname') | join(',') }}" 
+    ipport=7410
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  register: create_stonith
+  failed_when: create_stonith.rc != 0 and "already exists" not in create_stonith.stderr
+  changed_when: create_stonith.rc == 0
+  tags: stonith
+
+- name: Enable STONITH
+  shell: pcs property set stonith-enabled=true
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  changed_when: false
+  tags: stonith
