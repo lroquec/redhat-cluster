@@ -9,38 +9,33 @@ cluster_nodes:
   - name: "node1"
     hostname: "node1"
     ip: "192.168.6.39"
-    mgmt_ip: "10.0.0.1"  # Additional management IP - optional
+
   - name: "node2"
     hostname: "node2"
     ip: "192.168.6.41"
-    mgmt_ip: "10.0.0.2"  # Additional management IP - optional
 
 # Floating IP
 virtual_ip: "192.168.6.37"
 virtual_ip_cidr: "22"
 virtual_ip_interface: "enp6s18"  # Change to the appropriate interface
 
-# Additional network configuration for checks
-check_management_network: false  # Enable management network checks
-management_network_interface: "enp6s19"  # Management network interface
-
 # NFS configuration
 nfs_server: "192.168.4.36"
 nfs_share: "/var/lib/vz/nfs-export"
 mount_point: "/opt/nfs-shared"
 
-# Example service configuration
-app_service_name: "myapp"
-app_user: "appuser"
-app_group: "appgroup"
-app_start_script: "/opt/myapp/bin/start.sh"
-app_stop_script: "/opt/myapp/bin/stop.sh"
-app_status_script: "/opt/myapp/bin/status.sh"
-app_pid_file: "/var/run/myapp.pid"
+# Watchdog NFS arbitrator configuration
+watchdog_nfs_witness_dir: "/opt/nfs-witness"
+watchdog_active_nfs_failure_threshold: 60    # In seconds
+watchdog_standby_nfs_failure_threshold: 300  # In seconds
+watchdog_state_threshold: 60                 # In seconds
+watchdog_arbitrator: "192.168.4.24"   # Hostname or IP
 
-# Watchdog configuration
+# Hardware watchdog configuration
 watchdog_device: "/dev/watchdog"
 watchdog_interval: "10"
+watchdog_heartbeat_file: "/var/run/arbitrator-heartbeat"
+watchdog_heartbeat_change: "180"  # 3 minutes in seconds for reboot trigger
 
 # Resource monitoring configuration
 resource_monitor_interval: "30s"
@@ -51,3 +46,12 @@ fs_monitor_interval: "20s"
 firewall_services:
   - high-availability
   - https
+
+# Example service configuration
+app_service_name: "myapp"
+app_user: "appuser"
+app_group: "appgroup"
+app_start_script: "/opt/myapp/bin/start.sh"
+app_stop_script: "/opt/myapp/bin/stop.sh"
+app_status_script: "/opt/myapp/bin/status.sh"
+app_pid_file: "/var/run/myapp.pid"
