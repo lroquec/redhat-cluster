@@ -10,6 +10,8 @@
       - netcat
       - nmap-ncat
       - kexec-tools
+      - policycoreutils-python-utils
+      - libselinux-utils  
     state: present
   tags: packages
 
