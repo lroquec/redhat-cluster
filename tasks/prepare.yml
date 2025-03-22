@@ -38,3 +38,28 @@
     state: directory
     mode: '0755'
   tags: nfs
+
+- name: Create witness directory on NFS
+  file:
+    path: "{{ mount_point }}/witness"
+    state: directory
+    mode: "0755"
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  tags: watchdog
+
+- name: Create mount point for witness
+  file:
+    path: "{{ watchdog_nfs_witness_dir }}"
+    state: directory
+    mode: "0755"
+  tags: watchdog
+
+- name: Mount NFS witness directory
+  mount:
+    path: "{{ watchdog_nfs_witness_dir }}"
+    src: "{{ nfs_server }}:{{ nfs_share }}/witness"
+    fstype: nfs
+    opts: "noatime,sync"
+    state: mounted
+  tags: watchdog
