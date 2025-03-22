@@ -42,6 +42,72 @@
     mode: '0644'
   tags: watchdog
 
+- name: Create necessary directories and files for watchdog
+  file:
+    path: "{{ item.path }}"
+    state: "{{ item.state }}"
+    mode: "{{ item.mode }}"
+    owner: root
+    group: root
+  with_items:
+    - { path: "/run/watchdog", state: "directory", mode: '0755' }
+    - { path: "/run/watchdog.pid", state: "touch", mode: '0644' }
+    - { path: "/var/run/arbitrator-heartbeat", state: "touch", mode: '0644' }
+  tags: watchdog
+
+- name: Set SELinux context for watchdog files
+  sefcontext:
+    target: "{{ item.target }}"
+    setype: watchdog_t
+    state: present
+  with_items:
+    - { target: '/run/watchdog.pid' }
+    - { target: '/var/run/arbitrator-heartbeat' }
+  when: ansible_selinux.status == "enabled"
+  tags: watchdog
+
+- name: Apply SELinux context to watchdog files
+  command: restorecon -v {{ item }}
+  with_items:
+    - "/run/watchdog.pid"
+    - "/var/run/arbitrator-heartbeat"
+  when: ansible_selinux.status == "enabled"
+  changed_when: false
+  tags: watchdog
+
+- name: Create systemd-tmpfiles configuration for watchdog
+  copy:
+    content: |
+      f /run/watchdog.pid 0644 root root
+      f /var/run/arbitrator-heartbeat 0644 root root
+    dest: /etc/tmpfiles.d/watchdog-permissions.conf
+    owner: root
+    group: root
+    mode: '0644'
+  tags: watchdog
+
+- name: Create systemd override directory for watchdog
+  file:
+    path: /etc/systemd/system/watchdog.service.d
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  tags: watchdog
+
+- name: Create systemd override for watchdog
+  copy:
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/sbin/watchdog -c /etc/watchdog.conf -v -f
+    dest: /etc/systemd/system/watchdog.service.d/override.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart watchdog
+  tags: watchdog
+
 - name: Enable and start watchdog timer
   systemd:
     name: network-watchdog.timer
@@ -49,4 +115,3 @@
     state: started
     daemon_reload: yes
   tags: watchdog
-
