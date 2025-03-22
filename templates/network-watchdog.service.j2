@@ -1,6 +1,7 @@
 [Unit]
 Description=Cluster Network Watchdog Service
 After=network.target
+Before=watchdog.service
 
 [Service]
 Type=oneshot
