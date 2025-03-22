@@ -1,0 +1,230 @@
+#!/bin/bash
+#
+# Cluster Arbitration Script using NFS Witness File and Automatic Gateway Detection
+#
+# This script implements the following logic:
+#
+# For an ACTIVE node:
+#   - If the gateway (auto-detected), the arbitrator (responding via SSH), and NFS (read/write)
+#     are all operational, then no action is taken.
+#   - If NFS is not accessible for more than {{ watchdog_active_nfs_failure_threshold }} seconds, the node transitions to standby.
+#
+# For a STANDBY node:
+#   - If the gateway, arbitrator, and NFS are accessible, then the peer's state file on NFS
+#     is checked. If the peer's state file has not been updated for over {{ watchdog_state_threshold }} seconds, the node
+#     assumes the peer is down and acquires cluster resources.
+#   - If NFS is not accessible for more than {{ watchdog_standby_nfs_failure_threshold }} seconds, the node reboots.
+#
+
+# Configuration variables
+LOG_FILE="/var/log/cluster_arbitrator.log"
+NFS_WITNESS_DIR="{{ watchdog_nfs_witness_dir }}"       # NFS mount used as witness directory
+
+# Automatically determine the Gateway from the default route
+GATEWAY=$(ip route | grep '^default' | awk '{print $3}')
+ARBITRATOR="{{ watchdog_arbitrator }}"        # Set arbitrator hostname or IP as appropriate
+
+# Hostname variables directly from Ansible
+HOSTNAME="{{ ansible_hostname }}"
+# Use a unique test file for each node to avoid race conditions
+WITNESS_FILE="witness_test_${HOSTNAME}.tmp"    # Unique temporary file name for NFS read/write test
+
+# Configure other node directly from cluster_nodes variable
+{% for node in cluster_nodes %}
+{% if node.hostname != ansible_hostname %}
+OTHER_NODE="{{ node.hostname }}"
+{% endif %}
+{% endfor %}
+
+# If for some reason OTHER_NODE wasn't set by the above loop
+if [ -z "$OTHER_NODE" ]; then
+    # Fallback to trying to determine from /etc/hosts
+    OTHER_NODE=$(grep -v "$HOSTNAME" /etc/hosts | grep -v "localhost" | grep -v "virtual-ip" | grep -v "\-mgmt" | head -n 1 | awk '{print $2}')
+    
+    if [ -z "$OTHER_NODE" ]; then
+        echo "Error: Could not determine the other node's hostname" | logger -t cluster_arbitrator
+        # Don't exit, try to continue with what we can do
+    fi
+fi
+
+STATE_THRESHOLD={{ watchdog_state_threshold }}                        # Threshold (in seconds) for peer state file freshness
+ACTIVE_NFS_FAILURE_THRESHOLD={{ watchdog_active_nfs_failure_threshold }}           # For active node: if NFS fails for >60 seconds, go standby
+STANDBY_NFS_FAILURE_THRESHOLD={{ watchdog_standby_nfs_failure_threshold }}         # For standby node: if NFS fails for >300 seconds, reboot
+
+# File to track when NFS failures begin
+NFS_FAILURE_FILE="/var/run/nfs_failure.timestamp"
+
+# Create/update heartbeat file for hardware watchdog
+touch {{ watchdog_heartbeat_file }}
+
+SELF_STATE_FILE="${NFS_WITNESS_DIR}/${HOSTNAME}_state.json"
+OTHER_STATE_FILE="${NFS_WITNESS_DIR}/${OTHER_NODE}_state.json"
+
+# Logging function: writes to both a log file and the system logger
+log() {
+  local level="$1"
+  local message="$2"
+  local timestamp
+  timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+  echo "$timestamp [$level] $message" >> "$LOG_FILE"
+  logger -t cluster_arbitrator -p "daemon.$level" "$message"
+}
+
+# Function to update this node's state file (heartbeat) in the NFS witness directory.
+update_state() {
+  local status="$1"  # "active" or "standby"
+  local now
+  now=$(date +%s)
+  cat > "$SELF_STATE_FILE" <<EOF
+{
+  "hostname": "$HOSTNAME",
+  "last_update": $now,
+  "status": "$status"
+}
+EOF
+  log "info" "Updated self state to '$status' with timestamp $now."
+}
+
+# Function to check connectivity to the Gateway (using ping)
+check_gateway() {
+  ping -c 1 -W 2 "$GATEWAY" > /dev/null 2>&1
+  return $?
+}
+
+# Function to check if the Arbitrator responds on SSH (port 22) using netcat
+check_arbitrator() {
+  nc -z -w3 "$ARBITRATOR" 22 > /dev/null 2>&1
+  return $?
+}
+
+# Function to check NFS read/write capability
+check_nfs_rw() {
+  local test_file="${NFS_WITNESS_DIR}/${WITNESS_FILE}"
+  echo "test" > "$test_file" 2>/dev/null
+  if [ $? -ne 0 ]; then
+    return 1
+  fi
+  grep -q "test" "$test_file" 2>/dev/null
+  if [ $? -ne 0 ]; then
+    return 1
+  fi
+  rm -f "$test_file"
+  return 0
+}
+
+# Function to check the freshness of the peer's state file on NFS.
+check_peer_state() {
+  if [ ! -f "$OTHER_STATE_FILE" ]; then
+    log "warning" "Peer state file ($OTHER_STATE_FILE) does not exist."
+    return 1
+  fi
+  local other_timestamp
+  other_timestamp=$(grep '"last_update":' "$OTHER_STATE_FILE" | sed 's/[^0-9]*//g')
+  if [ -z "$other_timestamp" ]; then
+    log "warning" "Failed to parse peer timestamp from $OTHER_STATE_FILE."
+    return 1
+  fi
+  local now diff
+  now=$(date +%s)
+  diff=$((now - other_timestamp))
+  log "info" "Peer state file is $diff seconds old."
+  if [ $diff -le $STATE_THRESHOLD ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Function to determine if this node is active.
+# Here, we assume the node is active if its own state file indicates "active".
+is_active_node() {
+  if grep -q '"status": "active"' "$SELF_STATE_FILE" 2>/dev/null; then
+    return 0  # Active
+  else
+    return 1  # Standby
+  fi
+}
+
+# Functions to record and clear NFS failure timestamps.
+record_nfs_failure() {
+  if [ ! -f "$NFS_FAILURE_FILE" ]; then
+    date +%s > "$NFS_FAILURE_FILE"
+  fi
+}
+
+clear_nfs_failure() {
+  if [ -f "$NFS_FAILURE_FILE" ]; then
+    rm -f "$NFS_FAILURE_FILE"
+  fi
+}
+
+# Function to get the duration since the first NFS failure was recorded.
+get_nfs_failure_duration() {
+  if [ -f "$NFS_FAILURE_FILE" ]; then
+    local start_time now duration
+    start_time=$(cat "$NFS_FAILURE_FILE")
+    now=$(date +%s)
+    duration=$((now - start_time))
+    echo "$duration"
+  else
+    echo "0"
+  fi
+}
+
+# Ensure that the NFS witness directory exists
+mkdir -p "$NFS_WITNESS_DIR"
+
+# Update self state as active (this may be updated externally if role changes)
+update_state "active"
+
+# Run connectivity tests
+check_gateway && gateway_status=0 || gateway_status=1
+check_arbitrator && arbitrator_status=0 || arbitrator_status=1
+check_nfs_rw && nfs_status=0 || nfs_status=1
+
+if [ $nfs_status -eq 0 ]; then
+  clear_nfs_failure
+else
+  record_nfs_failure
+fi
+
+# Determine node role based on its state file.
+is_active_node
+if [ $? -eq 0 ]; then
+  # Active node logic
+  log "info" "Node is active."
+  if [ $gateway_status -eq 0 ] && [ $arbitrator_status -eq 0 ] && [ $nfs_status -eq 0 ]; then
+    log "info" "Active node: Gateway, Arbitrator, and NFS are operational. No action required."
+  else
+    duration=$(get_nfs_failure_duration)
+    log "warning" "Active node: NFS failure detected for $duration seconds."
+    if [ "$duration" -ge "$ACTIVE_NFS_FAILURE_THRESHOLD" ]; then
+      log "notice" "Active node: NFS failure exceeded threshold. Transitioning to standby."
+      pcs node standby "$HOSTNAME"
+      update_state "standby"
+    fi
+  fi
+else
+  # Standby node logic
+  log "info" "Node is standby."
+  if [ $gateway_status -eq 0 ] && [ $arbitrator_status -eq 0 ] && [ $nfs_status -eq 0 ]; then
+    log "info" "Standby node: Connectivity is healthy."
+    if check_peer_state; then
+      log "info" "Standby node: Peer state is up-to-date. Remaining in standby."
+    else
+      log "notice" "Standby node: Peer state is stale. Attempting to acquire cluster resources."
+      pcs node unstandby "$HOSTNAME"
+      pcs stonith fence "$OTHER_NODE"
+      update_state "active"
+    fi
+  else
+    duration=$(get_nfs_failure_duration)
+    log "warning" "Standby node: NFS failure detected for $duration seconds."
+    if [ "$duration" -ge "$STANDBY_NFS_FAILURE_THRESHOLD" ]; then
+      log "alert" "Standby node: NFS failure exceeded threshold. Rebooting node."
+      reboot
+    fi
+  fi
+fi
+
+exit 0
