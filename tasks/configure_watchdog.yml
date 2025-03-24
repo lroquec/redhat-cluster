@@ -62,8 +62,9 @@
 
       [Service]
       Type=simple
-      ExecStart=/bin/bash -c 'while true; do touch /var/run/arbitrator-heartbeat; chmod 666 /var/run/arbitrator-heartbeat; sleep 60; done'
+      ExecStart=/bin/bash -c 'while true; do touch /var/run/arbitrator-heartbeat; chmod 666 /var/run/arbitrator-heartbeat; sleep 30; done'
       Restart=always
+      RestartSec=5
 
       [Install]
       WantedBy=multi-user.target
@@ -78,6 +79,17 @@
     enabled: yes
     state: started
     daemon_reload: yes
+  tags: heartbeat
+
+- name: Wait for heartbeat to be updated at least once
+  wait_for:
+    path: /var/run/arbitrator-heartbeat
+    state: present
+  tags: heartbeat
+
+- name: Pause to ensure heartbeat file is updated
+  pause:
+    seconds: 5
   tags: heartbeat
 
 - name: Configure watchdog service
@@ -229,13 +241,6 @@
   command: semodule -i /tmp/watchdog_custom.pp
   tags: selinux
 
-- name: Enable and start watchdog service
-  systemd:
-    name: watchdog
-    enabled: yes
-    state: started
-  tags: watchdog
-
 - name: Enable and start watchdog timer
   systemd:
     name: network-watchdog.timer
@@ -243,4 +248,10 @@
     state: started
     daemon_reload: yes
   tags: watchdog
-  
+
+- name: Enable and start watchdog service
+  systemd:
+    name: watchdog
+    enabled: yes
+    state: started
+  tags: watchdog 
