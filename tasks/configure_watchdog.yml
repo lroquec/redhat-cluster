@@ -1,4 +1,85 @@
 ---
+- name: Temporarily mount NFS share
+  mount:
+    path: "/tmp/nfs_temp_mount"
+    src: "{{ nfs_server }}:{{ nfs_share }}"
+    fstype: nfs
+    opts: "noatime,sync"
+    state: mounted
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  tags: watchdog
+
+- name: Create witness directory on NFS
+  file:
+    path: "/tmp/nfs_temp_mount/witness"
+    state: directory
+    mode: "0755"
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  tags: watchdog
+
+- name: Unmount temporary NFS share
+  mount:
+    path: "/tmp/nfs_temp_mount"
+    state: unmounted
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  tags: watchdog
+
+- name: Remove temporary mount point
+  file:
+    path: "/tmp/nfs_temp_mount"
+    state: absent
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  tags: watchdog
+
+- name: Create mount point for witness
+  file:
+    path: "{{ watchdog_nfs_witness_dir }}"
+    state: directory
+    mode: "0755"
+  tags: watchdog
+
+- name: Mount NFS witness directory
+  mount:
+    path: "{{ watchdog_nfs_witness_dir }}"
+    src: "{{ nfs_server }}:{{ nfs_share }}/witness"
+    fstype: nfs
+    opts: "noatime,sync"
+    state: mounted
+  tags: watchdog
+
+- name: Create heartbeat-updater systemd service file
+  copy:
+    dest: /etc/systemd/system/heartbeat-updater.service
+    content: |
+      [Unit]
+      Description=Watchdog Heartbeat File Updater
+      Before=watchdog.service
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/bin/bash -c 'while true; do touch /var/run/arbitrator-heartbeat; chmod 666 /var/run/arbitrator-heartbeat; sleep 60; done'
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root
+    group: root
+    mode: '0644'
+  tags: heartbeat
+
+- name: Reload systemd daemon and enable/start heartbeat-updater service
+  systemd:
+    name: heartbeat-updater.service
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  tags: heartbeat
+
 - name: Configure watchdog service
   template:
     src: watchdog.conf.j2
@@ -6,13 +87,6 @@
     owner: root
     group: root
     mode: '0644'
-  tags: watchdog
-
-- name: Enable and start watchdog service
-  systemd:
-    name: watchdog
-    enabled: yes
-    state: started
   tags: watchdog
 
 - name: Create cluster arbitrator script from template
@@ -50,40 +124,19 @@
     owner: root
     group: root
   with_items:
-    - { path: "/run/watchdog", state: "directory", mode: '0755' }
-    - { path: "/run/watchdog.pid", state: "touch", mode: '0644' }
-    - { path: "/var/run/arbitrator-heartbeat", state: "touch", mode: '0644' }
-  tags: watchdog
-
-- name: Set SELinux context for watchdog files
-  sefcontext:
-    target: "{{ item.target }}"
-    setype: watchdog_t
-    state: present
-  with_items:
-    - { target: '/run/watchdog.pid' }
-    - { target: '/var/run/arbitrator-heartbeat' }
-  when: ansible_selinux.status == "enabled"
-  tags: watchdog
-
-- name: Apply SELinux context to watchdog files
-  command: restorecon -v {{ item }}
-  with_items:
-    - "/run/watchdog.pid"
-    - "/var/run/arbitrator-heartbeat"
-  when: ansible_selinux.status == "enabled"
-  changed_when: false
+    - { path: "/var/run/watchdog.pid", state: "touch", mode: '0666' }
+    - { path: "/var/run/arbitrator-heartbeat", state: "touch", mode: '0666' }
   tags: watchdog
 
 - name: Create systemd-tmpfiles configuration for watchdog
   copy:
     content: |
-      f /run/watchdog.pid 0644 root root
-      f /var/run/arbitrator-heartbeat 0644 root root
+      f /var/run/watchdog.pid 0666 root root
+      f /var/run/arbitrator-heartbeat 0666 root root
     dest: /etc/tmpfiles.d/watchdog-permissions.conf
     owner: root
     group: root
-    mode: '0644'
+    mode: '0666'
   tags: watchdog
 
 - name: Create systemd override directory for watchdog
@@ -108,6 +161,81 @@
   notify: restart watchdog
   tags: watchdog
 
+- name: Create custom SELinux module source file for watchdog
+  copy:
+    dest: /tmp/watchdog_custom.te
+    content: |
+      module watchdog_custom 1.0;
+
+      require {
+              type watchdog_t;
+              type getty_t;
+              type syslogd_t;
+              type irqbalance_t;
+              type systemd_logind_t;
+              type sshd_t;
+              type NetworkManager_t;
+              type system_dbusd_t;
+              type cluster_t;
+              type chronyd_t;
+              type crond_t;
+              type var_run_t;
+              type kernel_t;
+              type gssproxy_t;
+              type udev_t;
+              type auditd_t;
+              type firewalld_t;
+              type rpcbind_t;
+              type initrc_var_run_t;
+              class file { getattr open read };
+              class dir search;
+      }
+
+      #============= watchdog_t ==============
+      allow watchdog_t NetworkManager_t:dir search;
+      allow watchdog_t auditd_t:dir search;
+      allow watchdog_t chronyd_t:dir search;
+      allow watchdog_t cluster_t:dir search;
+      allow watchdog_t crond_t:dir search;
+      allow watchdog_t firewalld_t:dir search;
+      allow watchdog_t getty_t:dir search;
+      allow watchdog_t gssproxy_t:dir search;
+      allow watchdog_t irqbalance_t:dir search;
+      allow watchdog_t kernel_t:dir search;
+      allow watchdog_t rpcbind_t:dir search;
+      allow watchdog_t sshd_t:dir search;
+      allow watchdog_t syslogd_t:dir search;
+      allow watchdog_t system_dbusd_t:dir search;
+      allow watchdog_t systemd_logind_t:dir search;
+      allow watchdog_t udev_t:dir search;
+      allow watchdog_t initrc_var_run_t:file { open read };
+      allow watchdog_t initrc_var_run_t:file getattr;
+      allow watchdog_t var_run_t:file getattr;
+  tags: selinux
+
+- name: Compile the SELinux module source to a module file
+  command: checkmodule -M -m -o /tmp/watchdog_custom.mod /tmp/watchdog_custom.te
+  args:
+    creates: /tmp/watchdog_custom.mod
+  tags: selinux
+
+- name: Package the SELinux module into a policy package (.pp)
+  command: semodule_package -o /tmp/watchdog_custom.pp -m /tmp/watchdog_custom.mod
+  args:
+    creates: /tmp/watchdog_custom.pp
+  tags: selinux
+
+- name: Install the custom SELinux module for watchdog
+  command: semodule -i /tmp/watchdog_custom.pp
+  tags: selinux
+
+- name: Enable and start watchdog service
+  systemd:
+    name: watchdog
+    enabled: yes
+    state: started
+  tags: watchdog
+
 - name: Enable and start watchdog timer
   systemd:
     name: network-watchdog.timer
@@ -115,3 +243,4 @@
     state: started
     daemon_reload: yes
   tags: watchdog
+  
