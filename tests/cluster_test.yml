@@ -1,0 +1,135 @@
+---
+# verify-cluster-simple.yml
+# Un playbook simplificado para verificar la funcionalidad del clúster
+- name: Verify High Availability Cluster
+  hosts: cluster_nodes
+  become: yes
+  gather_facts: yes
+  
+  tasks:
+    - name: Gather cluster status
+      command: pcs status
+      register: cluster_status
+      changed_when: false
+      run_once: true
+      delegate_to: "{{ groups['cluster_nodes'][0] }}"
+      
+    - name: Display cluster status
+      debug:
+        var: cluster_status.stdout_lines
+      run_once: true
+      
+    - name: Check if nodes are online
+      shell: pcs status | grep -A 2 "Online:" | grep -q {{ inventory_hostname }}
+      register: node_online_check
+      changed_when: false
+      failed_when: false
+      
+    - name: Display node online status
+      debug:
+        msg: "Node {{ inventory_hostname }} is {{ 'ONLINE' if node_online_check.rc == 0 else 'OFFLINE' }}"
+      
+    - name: Check if STONITH is enabled
+      shell: pcs property show stonith-enabled
+      register: stonith_status
+      changed_when: false
+      run_once: true
+      delegate_to: "{{ groups['cluster_nodes'][0] }}"
+      
+    - name: Display STONITH status
+      debug:
+        var: stonith_status.stdout_lines
+      run_once: true
+      
+    - name: Check if there are STONITH devices configured
+      command: pcs stonith status
+      register: stonith_devices
+      changed_when: false
+      run_once: true
+      delegate_to: "{{ groups['cluster_nodes'][0] }}"
+      failed_when: false
+      
+    - name: Display STONITH devices
+      debug:
+        var: stonith_devices.stdout_lines
+      run_once: true
+      
+    - name: Check resource status
+      command: pcs status resources
+      register: resource_status
+      changed_when: false
+      run_once: true
+      delegate_to: "{{ groups['cluster_nodes'][0] }}"
+      
+    - name: Display resource status
+      debug:
+        var: resource_status.stdout_lines
+      run_once: true
+      
+    - name: Check cluster constraints
+      command: pcs constraint
+      register: constraints
+      changed_when: false
+      run_once: true
+      delegate_to: "{{ groups['cluster_nodes'][0] }}"
+      
+    - name: Display cluster constraints
+      debug:
+        var: constraints.stdout_lines
+      run_once: true
+      
+    - name: Check watchdog status
+      command: systemctl status watchdog
+      register: watchdog_status
+      changed_when: false
+      failed_when: false
+      
+    - name: Display watchdog status (summarized)
+      debug:
+        msg: "Watchdog service on {{ inventory_hostname }} is {{ 'active' if 'Active: active' in watchdog_status.stdout else 'inactive' }}"
+        
+    - name: Check network watchdog timer status
+      command: systemctl status network-watchdog.timer
+      register: timer_status
+      changed_when: false
+      failed_when: false
+      
+    - name: Display network watchdog timer status (summarized)
+      debug:
+        msg: "Network watchdog timer on {{ inventory_hostname }} is {{ 'active' if 'Active: active' in timer_status.stdout else 'inactive' }}"
+        
+    - name: Check for recent failures in the cluster log
+      shell: grep -i fail /var/log/messages | grep -i pacemaker | tail -10
+      register: failure_logs
+      changed_when: false
+      failed_when: false
+      
+    - name: Display any recent failures
+      debug:
+        msg: "Recent failures detected on {{ inventory_hostname }}: {{ failure_logs.stdout_lines | default([]) }}"
+      when: failure_logs.stdout != ""
+      
+    - name: Generate simple verification report
+      copy:
+        content: |
+          Cluster Verification Report - {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+          -----------------------------------------------------------
+          Hostname: {{ inventory_hostname }}
+          Node online status: {{ 'Online' if node_online_check.rc == 0 else 'Offline' }}
+          STONITH enabled: {{ 'Yes' if 'stonith-enabled=true' in stonith_status.stdout else 'No' }}
+          STONITH devices configured: {{ 'Yes' if stonith_devices.stdout is defined and stonith_devices.stdout|length > 0 else 'No' }}
+          Watchdog service active: {{ 'Yes' if watchdog_status.stdout is defined and 'Active: active' in watchdog_status.stdout else 'No' }}
+          Network Watchdog timer active: {{ 'Yes' if timer_status.stdout is defined and 'Active: active' in timer_status.stdout else 'No' }}
+          Recent failures detected: {{ 'Yes' if failure_logs.stdout|length > 0 else 'No' }}
+          -----------------------------------------------------------
+        dest: "/tmp/cluster_verification_{{ inventory_hostname }}.txt"
+        mode: '0644'
+      
+    - name: Display verification report
+      command: cat /tmp/cluster_verification_{{ inventory_hostname }}.txt
+      register: report
+      changed_when: false
+      
+    - name: Output verification report
+      debug:
+        var: report.stdout_lines
