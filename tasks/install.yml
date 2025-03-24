@@ -5,13 +5,13 @@
       - pcs
       - pacemaker
       - resource-agents
+      - fence-agents-all
       - nfs-utils
       - watchdog
-      - netcat
       - nmap-ncat
       - kexec-tools
       - policycoreutils-python-utils
-      - libselinux-utils  
+      - libselinux-utils     
     state: present
   tags: packages
 
