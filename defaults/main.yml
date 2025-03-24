@@ -8,16 +8,16 @@ cluster_password: "clusterpass"  # Change this or use vault
 cluster_nodes:
   - name: "node1"
     hostname: "node1"
-    ip: "192.168.6.39"
+    ip: "192.168.6.45"
 
   - name: "node2"
     hostname: "node2"
-    ip: "192.168.6.41"
+    ip: "192.168.6.46"
 
 # Floating IP
 virtual_ip: "192.168.6.37"
 virtual_ip_cidr: "22"
-virtual_ip_interface: "enp6s18"  # Change to the appropriate interface
+virtual_ip_interface: "ens18"  # Change to the appropriate interface
 
 # NFS configuration
 nfs_server: "192.168.4.36"
