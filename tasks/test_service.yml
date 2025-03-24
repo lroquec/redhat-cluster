@@ -1,4 +1,66 @@
 ---
+- name: Create application service file
+  template:
+    src: myapp.service.j2
+    dest: /etc/systemd/system/{{ app_service_name }}.service
+    owner: root
+    group: root
+    mode: '0644'
+  tags: test_service
+
+- name: Create application user and group
+  user:
+    name: "{{ app_user }}"
+    group: "{{ app_group }}"
+    system: yes
+    create_home: no
+    state: present
+  tags: test_service
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+  tags: test_service
+
+- name: Create application service resource
+  shell: pcs resource create app_service systemd:{{ app_service_name }} op monitor interval={{ resource_monitor_interval }}
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  register: create_app
+  failed_when: create_app.rc != 0 and "already exists" not in create_app.stderr
+  changed_when: create_app.rc == 0
+  tags: test_service
+
+- name: Set order constraints
+  shell: |
+    pcs constraint order fs_shared then app_service --force
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  changed_when: false
+  tags: test_service
+
+- name: Set colocation constraints
+  shell: |
+    pcs constraint colocation add app_service with fs_shared INFINITY --force
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  changed_when: false
+  tags: test_service
+
+- name: Enable resources in cluster
+  shell: pcs resource enable app_service
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  ignore_errors: yes
+  tags: test_service
+
+- name: Cleanup resources
+  shell: pcs resource cleanup
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  ignore_errors: yes
+  tags: test_service
+
 # Tasks to create a simple test service
 - name: Ensure the application group exists
   group:
