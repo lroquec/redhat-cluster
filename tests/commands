@@ -1,3 +1,8 @@
+# For testing in AlmaLinux
+dnf install -y dnf-utils
+dnf config-manager --set-enabled highavailability
+dnf makecache
+
 # In both servers
 
 # Update servers
@@ -121,6 +126,20 @@ pcs constraint colocation add spawner_service with tomcat_service INFINITY
 
 ----
 # Test
+pcs status
+
+# Verify resources
+ip a | grep virtual_ip
+
+# Verify NFS mount
+mount | grep nfs
+
+# Verify watchdog
+systemctl status watchdog
+
+# Verify stonith
+pcs stonith status
+
 # Simulate failure active node
 pcs node standby node1
 
