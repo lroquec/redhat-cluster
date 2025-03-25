@@ -16,11 +16,6 @@
 #   - If NFS is not accessible for more than {{ watchdog_standby_nfs_failure_threshold }} seconds, the node reboots.
 #
 
-# Create and set permissions for heartbeat file
-touch /var/run/arbitrator-heartbeat
-chmod 644 /var/run/arbitrator-heartbeat
-chcon -t watchdog_t /var/run/arbitrator-heartbeat 2>/dev/null || true
-
 # Configuration variables
 LOG_FILE="/var/log/cluster_arbitrator.log"
 NFS_WITNESS_DIR="{{ watchdog_nfs_witness_dir }}"       # NFS mount used as witness directory
@@ -29,23 +24,40 @@ NFS_WITNESS_DIR="{{ watchdog_nfs_witness_dir }}"       # NFS mount used as witne
 GATEWAY=$(ip route | grep '^default' | awk '{print $3}')
 ARBITRATOR="{{ watchdog_arbitrator }}"        # Set arbitrator hostname or IP as appropriate
 
-# Hostname variables directly from Ansible
-HOSTNAME="{{ ansible_hostname }}"
+# Hostname variables from cluster_nodes
+# Determine current node based on actual hostname
+CURRENT_HOSTNAME=$(hostname)
+
+{% for node in cluster_nodes %}
+if [[ "$CURRENT_HOSTNAME" == "{{ node.hostname }}" ]]; then
+    HOSTNAME="{{ node.hostname }}"
+    NODE_IP="{{ node.ip }}"
+fi
+{% endfor %}
+
+# If HOSTNAME isn't set, fall back to current hostname
+if [ -z "$HOSTNAME" ]; then
+    HOSTNAME="$CURRENT_HOSTNAME"
+    echo "Warning: Could not find hostname in cluster_nodes config. Using current hostname: $HOSTNAME" | logger -t cluster_arbitrator
+fi
+
 # Use a unique test file for each node to avoid race conditions
 WITNESS_FILE="witness_test_${HOSTNAME}.tmp"    # Unique temporary file name for NFS read/write test
 
 # Configure other node directly from cluster_nodes variable
 {% for node in cluster_nodes %}
-{% if node.hostname != ansible_hostname %}
-OTHER_NODE="{{ node.hostname }}"
-{% endif %}
+# Checking if this is the other node
+if [[ "{{ node.hostname }}" != "$HOSTNAME" ]]; then
+    OTHER_NODE="{{ node.hostname }}"
+    OTHER_NODE_IP="{{ node.ip }}"
+fi
 {% endfor %}
 
 # If for some reason OTHER_NODE wasn't set by the above loop
 if [ -z "$OTHER_NODE" ]; then
     # Fallback to trying to determine from /etc/hosts
     OTHER_NODE=$(grep -v "$HOSTNAME" /etc/hosts | grep -v "localhost" | grep -v "virtual-ip" | grep -v "\-mgmt" | head -n 1 | awk '{print $2}')
-    
+
     if [ -z "$OTHER_NODE" ]; then
         echo "Error: Could not determine the other node's hostname" | logger -t cluster_arbitrator
         # Don't exit, try to continue with what we can do
@@ -73,6 +85,41 @@ log() {
   timestamp=$(date '+%Y-%m-%d %H:%M:%S')
   echo "$timestamp [$level] $message" >> "$LOG_FILE"
   logger -t cluster_arbitrator -p "daemon.$level" "$message"
+
+  # For critical messages, save additional diagnostic information
+  if [ "$level" = "alert" ] || [ "$level" = "crit" ] || [ "$level" = "emerg" ]; then
+    {
+      echo "-------- DIAGNOSTIC INFO --------"
+      echo "Date: $(date)"
+      echo "Hostname: $HOSTNAME"
+      echo "Current role: $(is_active_node && echo 'ACTIVE' || echo 'STANDBY')"
+      echo "Gateway status: $(check_gateway && echo 'UP' || echo 'DOWN')"
+      echo "Arbitrator status: $(check_arbitrator && echo 'UP' || echo 'DOWN')"
+      echo "NFS status: $(check_nfs_rw && echo 'OK' || echo 'FAILED')"
+      echo "NFS failure duration: $(get_nfs_failure_duration) seconds"
+      echo "Mount points:"
+      mount | grep nfs
+      echo "Peer state file:"
+      if [ -f "$OTHER_STATE_FILE" ]; then
+        cat "$OTHER_STATE_FILE"
+      else
+        echo "NOT FOUND"
+      fi
+      echo "Self state file:"
+      if [ -f "$SELF_STATE_FILE" ]; then
+        cat "$SELF_STATE_FILE"
+      else
+        echo "NOT FOUND"
+      fi
+      echo "Cluster status:"
+      pcs status 2>/dev/null || echo "Failed to get cluster status"
+      echo "Process list:"
+      ps aux | grep -E 'watchdog|heartbeat|pcs|pacemaker|corosync|nfs'
+      echo "Last 20 lines from system log:"
+      tail -n 20 /var/log/messages 2>/dev/null || journalctl -n 20 2>/dev/null
+      echo "-------- END DIAGNOSTIC INFO --------"
+    } >> "${LOG_FILE}.diagnostics.$(date +%s)"
+  fi
 }
 
 # Function to update this node's state file (heartbeat) in the NFS witness directory.
@@ -102,17 +149,49 @@ check_arbitrator() {
   return $?
 }
 
-# Function to check NFS read/write capability
+# Function to check if NFS directory is actually mounted
+check_nfs_mounted() {
+  local mount_point="$1"
+  # Use findmnt to check if the directory is actually mounted
+  findmnt -t nfs,nfs4 "$mount_point" > /dev/null 2>&1
+  return $?
+}
+
+# Improved function to check NFS read/write capability
 check_nfs_rw() {
   local test_file="${NFS_WITNESS_DIR}/${WITNESS_FILE}"
+
+  # First check if NFS is actually mounted
+  if ! check_nfs_mounted "${NFS_WITNESS_DIR}"; then
+    log "warning" "NFS mount point ${NFS_WITNESS_DIR} is not mounted"
+    return 1
+  fi
+
+  # Get the device ID of the mount point and parent directory
+  local mount_dev=$(stat -c %d "${NFS_WITNESS_DIR}")
+  local parent_dev=$(stat -c %d "$(dirname "${NFS_WITNESS_DIR}")")
+
+  # If they're the same, the directory is not a mount point
+  if [ "$mount_dev" = "$parent_dev" ]; then
+    log "warning" "NFS mount point ${NFS_WITNESS_DIR} is not a separate filesystem"
+    return 1
+  fi
+
+  # Try to write to the file
   echo "test" > "$test_file" 2>/dev/null
   if [ $? -ne 0 ]; then
+    log "warning" "Cannot write to NFS mount ${NFS_WITNESS_DIR}"
     return 1
   fi
+
+  # Try to read from the file
   grep -q "test" "$test_file" 2>/dev/null
   if [ $? -ne 0 ]; then
+    log "warning" "Cannot read from NFS mount ${NFS_WITNESS_DIR}"
     return 1
   fi
+
+  # Clean up
   rm -f "$test_file"
   return 0
 }
@@ -226,8 +305,31 @@ else
     duration=$(get_nfs_failure_duration)
     log "warning" "Standby node: NFS failure detected for $duration seconds."
     if [ "$duration" -ge "$STANDBY_NFS_FAILURE_THRESHOLD" ]; then
-      log "alert" "Standby node: NFS failure exceeded threshold. Rebooting node."
-      reboot
+      log "alert" "Standby node: NFS failure exceeded threshold (${duration}s > ${STANDBY_NFS_FAILURE_THRESHOLD}s). WOULD REBOOT node."
+      log "alert" "*** IMPORTANT: Recording diagnostic information before potential reboot ***"
+      # Save complete cluster status
+      pcs status > "${LOG_FILE}.preboot_cluster_status.$(date +%s)" 2>/dev/null
+      # Detailed log of critical services
+      systemctl status watchdog heartbeat-updater network-watchdog pcsd corosync pacemaker > "${LOG_FILE}.preboot_services.$(date +%s)" 2>/dev/null
+
+      # Try to resolve the issue before rebooting
+      log "notice" "Attempt recovery: Forcing resource cleanup"
+      pcs resource cleanup 2>/dev/null || true
+
+      # Wait 30 seconds to see if recovery works
+      log "notice" "Waiting 30 seconds to see if cleanup resolves the issue..."
+      sleep 30
+
+      # Check if the problem persists
+      if check_nfs_rw; then
+        log "notice" "NFS is now accessible after cleanup! Aborting reboot."
+        clear_nfs_failure
+      else
+        log "alert" "NFS still unavailable after cleanup. Will reboot in 10 seconds unless interrupted."
+        sleep 10
+        log "emerg" "REBOOTING NODE due to persistent NFS failure"
+        /sbin/reboot -f
+      fi
     fi
   fi
 fi
