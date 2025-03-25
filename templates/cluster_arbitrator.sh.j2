@@ -127,14 +127,49 @@ update_state() {
   local status="$1"  # "active" or "standby"
   local now
   now=$(date +%s)
-  cat > "$SELF_STATE_FILE" <<EOF
+
+  # Verify if NFS is mounted
+  if ! check_nfs_mounted "${NFS_WITNESS_DIR}"; then
+    log "error" "Cannot update state file: NFS not mounted at ${NFS_WITNESS_DIR}"
+    return 1
+  fi
+
+  # Ensure directory exists
+  mkdir -p "${NFS_WITNESS_DIR}" 2>/dev/null
+
+  # Write the state file with error redirection
+  log "info" "Attempting to update state file to '$status' with timestamp $now"
+  if ! cat > "$SELF_STATE_FILE" 2>/dev/null <<EOF
 {
   "hostname": "$HOSTNAME",
   "last_update": $now,
   "status": "$status"
 }
 EOF
-  log "info" "Updated self state to '$status' with timestamp $now."
+  then
+    log "error" "Failed to write to state file: $SELF_STATE_FILE"
+    return 1
+  fi
+
+  # Verify file exists
+  if [ ! -f "$SELF_STATE_FILE" ]; then
+    log "error" "State file does not exist after writing: $SELF_STATE_FILE"
+    return 1
+  fi
+
+  # Verify content is correct
+  local stored_timestamp
+  stored_timestamp=$(grep '"last_update":' "$SELF_STATE_FILE" 2>/dev/null | sed 's/[^0-9]*//g')
+  if [ -z "$stored_timestamp" ]; then
+    log "error" "Cannot read timestamp from state file after writing"
+    return 1
+  elif [ "$stored_timestamp" != "$now" ]; then
+    log "error" "Timestamp in file does not match: expected=$now, actual=$stored_timestamp"
+    return 1
+  fi
+
+  log "info" "State file successfully updated to '$status' with timestamp $now"
+  return 0
 }
 
 # Function to check connectivity to the Gateway (using ping)
@@ -168,8 +203,8 @@ check_nfs_rw() {
   fi
 
   # Get the device ID of the mount point and parent directory
-  local mount_dev=$(stat -c %d "${NFS_WITNESS_DIR}")
-  local parent_dev=$(stat -c %d "$(dirname "${NFS_WITNESS_DIR}")")
+  local mount_dev=$(stat -c %d "${NFS_WITNESS_DIR}" 2>/dev/null)
+  local parent_dev=$(stat -c %d "$(dirname "${NFS_WITNESS_DIR}")" 2>/dev/null)
 
   # If they're the same, the directory is not a mount point
   if [ "$mount_dev" = "$parent_dev" ]; then
@@ -188,6 +223,7 @@ check_nfs_rw() {
   grep -q "test" "$test_file" 2>/dev/null
   if [ $? -ne 0 ]; then
     log "warning" "Cannot read from NFS mount ${NFS_WITNESS_DIR}"
+    rm -f "$test_file" 2>/dev/null
     return 1
   fi
 
@@ -220,12 +256,15 @@ check_peer_state() {
 }
 
 # Function to determine if this node is active.
-# Here, we assume the node is active if its own state file indicates "active".
+# We now check the actual cluster state instead of just the JSON file
 is_active_node() {
-  if grep -q '"status": "active"' "$SELF_STATE_FILE" 2>/dev/null; then
-    return 0  # Active
+  # First check the actual cluster state
+  if pcs node status "$HOSTNAME" 2>/dev/null | grep -q "Standby:.*on"; then
+    # If node is in standby according to the cluster, it's not active
+    return 1  # Not active (standby)
   else
-    return 1  # Standby
+    # If node is not in standby according to the cluster, it's active
+    return 0  # Active
   fi
 }
 
@@ -255,16 +294,41 @@ get_nfs_failure_duration() {
   fi
 }
 
-# Ensure that the NFS witness directory exists
-mkdir -p "$NFS_WITNESS_DIR"
-
-# Update self state as active (this may be updated externally if role changes)
-update_state "active"
-
 # Run connectivity tests
 check_gateway && gateway_status=0 || gateway_status=1
 check_arbitrator && arbitrator_status=0 || arbitrator_status=1
 check_nfs_rw && nfs_status=0 || nfs_status=1
+
+log "info" "Status check: Gateway=${gateway_status}, Arbitrator=${arbitrator_status}, NFS=${nfs_status}"
+
+# Update the state file at the beginning if NFS is accessible
+if [ $nfs_status -eq 0 ]; then
+  # Get the current node status from the cluster
+  if pcs node status "$HOSTNAME" 2>/dev/null | grep -q "Standby:.*on"; then
+    log "info" "Node is in standby according to the cluster, updating state"
+    update_state "standby"
+  else
+    log "info" "Node is active according to the cluster, updating state"
+    update_state "active"
+  fi
+
+  # If node is in standby and NFS is available, try to take it out of standby
+  if pcs node status "$HOSTNAME" 2>/dev/null | grep -q "Standby:.*on"; then
+    if ! pcs node status "$HOSTNAME" 2>/dev/null | grep -q "Maintenance:.*on"; then
+      log "notice" "Node is in standby but not in maintenance, and NFS is available. Attempting to remove standby."
+      if pcs node unstandby "$HOSTNAME"; then
+        log "notice" "Successfully removed standby from node $HOSTNAME"
+        update_state "active"
+        log "notice" "State updated to active after removing standby"
+        exit 0
+      else
+        log "error" "Error trying to remove standby from node $HOSTNAME"
+      fi
+    else
+      log "info" "Node is in maintenance mode, not attempting to remove standby"
+    fi
+  fi
+fi
 
 if [ $nfs_status -eq 0 ]; then
   clear_nfs_failure
@@ -272,7 +336,7 @@ else
   record_nfs_failure
 fi
 
-# Determine node role based on its state file.
+# Determine node role based on its actual cluster state
 is_active_node
 if [ $? -eq 0 ]; then
   # Active node logic
@@ -285,7 +349,7 @@ if [ $? -eq 0 ]; then
     if [ "$duration" -ge "$ACTIVE_NFS_FAILURE_THRESHOLD" ]; then
       log "notice" "Active node: NFS failure exceeded threshold. Transitioning to standby."
       pcs node standby "$HOSTNAME"
-      update_state "standby"
+      # We don't update state here because NFS is not available
     fi
   fi
 else
