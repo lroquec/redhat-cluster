@@ -1,0 +1,131 @@
+---
+- name: Create diagnostics directory
+  file:
+    path: /var/log/cluster_diagnostics
+    state: directory
+    mode: '0755'
+  tags: diagnostics
+
+- name: Create extended watchdog logger file
+  copy:
+    dest: /usr/local/bin/watchdog-logger.sh
+    content: |
+      #!/bin/bash
+      # Enhanced logging for watchdog operations
+      LOG_DIR="/var/log/cluster_diagnostics"
+      mkdir -p $LOG_DIR
+
+      # Get current date and timestamp
+      TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+
+      # Log system information
+      {
+        echo "========== WATCHDOG DIAGNOSTIC LOG - $TIMESTAMP =========="
+        echo "Hostname: $(hostname)"
+        echo "Uptime: $(uptime)"
+        echo "Date: $(date)"
+        echo ""
+
+        echo "===== WATCHDOG STATUS ====="
+        systemctl status watchdog
+        echo ""
+
+        echo "===== HEARTBEAT UPDATER STATUS ====="
+        systemctl status heartbeat-updater
+        echo ""
+
+        echo "===== NETWORK WATCHDOG STATUS ====="
+        systemctl status network-watchdog
+        echo ""
+
+        echo "===== HEARTBEAT FILE STATUS ====="
+        if [ -f /var/run/arbitrator-heartbeat ]; then
+          echo "File exists: YES"
+          echo "Last modified: $(stat -c '%y' /var/run/arbitrator-heartbeat)"
+          echo "Permissions: $(stat -c '%a' /var/run/arbitrator-heartbeat)"
+          echo "SELinux context: $(ls -Z /var/run/arbitrator-heartbeat)"
+        else
+          echo "File exists: NO"
+        fi
+        echo ""
+
+        echo "===== CLUSTER STATUS ====="
+        pcs status 2>/dev/null || echo "Failed to get cluster status"
+        echo ""
+
+        echo "===== NFS MOUNTS ====="
+        mount | grep nfs
+        echo ""
+
+        echo "===== PROCESS LIST (RELATED) ====="
+        ps aux | grep -E 'watchdog|heart|arbitrator|pcs|pace|coro|nfs'
+        echo ""
+
+        echo "===== LAST 50 SYSTEM LOG ENTRIES (RELEVANT) ====="
+        grep -i -E 'watchdog|heart|reboot|panic|arbitrator|nfs|fence|stonith|pcs|fail' /var/log/messages 2>/dev/null | tail -n 50 || journalctl -n 50 2>/dev/null
+        echo ""
+
+        echo "========== END LOG =========="
+      } > "$LOG_DIR/watchdog-diagnostics-$TIMESTAMP.log"
+
+      # Create a symlink to the latest log
+      ln -sf "$LOG_DIR/watchdog-diagnostics-$TIMESTAMP.log" "$LOG_DIR/watchdog-latest.log"
+    owner: root
+    group: root
+    mode: '0755'
+  tags: diagnostics
+
+- name: Create systemd service for watchdog diagnostics
+  copy:
+    dest: /etc/systemd/system/watchdog-diagnostics.service
+    content: |
+      [Unit]
+      Description=Watchdog Diagnostics Logger
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/watchdog-logger.sh
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root
+    group: root
+    mode: '0644'
+  tags: diagnostics
+
+- name: Create systemd timer for watchdog diagnostics
+  copy:
+    dest: /etc/systemd/system/watchdog-diagnostics.timer
+    content: |
+      [Unit]
+      Description=Run Watchdog Diagnostics Logger periodically
+
+      [Timer]
+      OnBootSec=60
+      OnUnitActiveSec=300
+
+      [Install]
+      WantedBy=timers.target
+    owner: root
+    group: root
+    mode: '0644'
+  tags: diagnostics
+
+- name: Reload systemd to pick up new service and timer
+  systemd:
+    daemon_reload: yes
+  tags: diagnostics
+
+- name: Enable and start watchdog diagnostics timer
+  systemd:
+    name: watchdog-diagnostics.timer
+    enabled: yes
+    state: started
+  tags: diagnostics
+
+- name: Run watchdog diagnostics immediately
+  systemd:
+    name: watchdog-diagnostics.service
+    state: started
+  tags: diagnostics
