@@ -1,13 +1,108 @@
 ---
-- name: Check cluster status
-  shell: pcs status
-  register: cluster_status
+- name: Collect and display comprehensive cluster diagnostics
+  shell: |
+    mkdir -p /var/log/cluster_diagnostics
+    TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+    LOG_FILE="/var/log/cluster_diagnostics/post_install_$TIMESTAMP.log"
+
+    {
+      echo "===== COMPREHENSIVE CLUSTER STATUS ====="
+      echo "Date: $(date)"
+      echo "Hostname: $(hostname)"
+      echo ""
+
+      echo "===== PCS STATUS ====="
+      pcs status
+      echo ""
+
+      echo "===== PCS STATUS NODES ====="
+      pcs status nodes
+      echo ""
+
+      echo "===== PCS STATUS RESOURCES ====="
+      pcs status resources
+      echo ""
+
+      echo "===== PCS STONITH STATUS ====="
+      pcs stonith status
+      echo ""
+
+      echo "===== PCS CONSTRAINTS ====="
+      pcs constraint
+      echo ""
+
+      echo "===== NFS MOUNTS ====="
+      mount | grep nfs
+      echo ""
+
+      echo "===== NETWORK CONNECTIVITY ====="
+      {% for node in cluster_nodes %}
+      ping -c 1 {{ node.hostname }} &>/dev/null && echo "{{ node.hostname }} is reachable" || echo "{{ node.hostname }} is NOT reachable"
+      {% endfor %}
+      ping -c 1 {{ virtual_ip }} &>/dev/null && echo "{{ virtual_ip }} is reachable" || echo "{{ virtual_ip }} is NOT reachable"
+      echo ""
+
+      echo "===== WATCHDOG STATUS ====="
+      systemctl status watchdog
+      echo ""
+
+      echo "===== HEARTBEAT UPDATER STATUS ====="
+      systemctl status heartbeat-updater
+      echo ""
+
+      echo "===== NETWORK WATCHDOG STATUS ====="
+      systemctl status network-watchdog
+      echo ""
+
+      echo "===== HEARTBEAT FILE STATUS ====="
+      if [ -f /var/run/arbitrator-heartbeat ]; then
+        echo "File exists: YES"
+        echo "Last modified: $(stat -c '%y' /var/run/arbitrator-heartbeat)"
+        echo "Permissions: $(stat -c '%a' /var/run/arbitrator-heartbeat)"
+        echo "SELinux context: $(ls -Z /var/run/arbitrator-heartbeat)"
+      else
+        echo "File exists: NO"
+      fi
+      echo ""
+
+      echo "===== SERVICE STATUS ====="
+      systemctl status pcsd corosync pacemaker
+      echo ""
+
+      echo "===== PROCESS LIST (RELATED) ====="
+      ps aux | grep -E 'watchdog|heart|arbitrator|pcs|pace|coro|nfs'
+      echo ""
+    } > "$LOG_FILE"
+
+    echo "Diagnostics saved to $LOG_FILE"
+    ls -la "$LOG_FILE"
+  register: comprehensive_status
   changed_when: false
-  run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
   tags: validate
 
-- name: Display cluster status
+- name: Display diagnostics location
   debug:
-    var: cluster_status.stdout_lines
+    msg: "{{ comprehensive_status.stdout_lines }}"
   tags: validate
+
+- name: Copy post-installation monitoring script
+  copy:
+    src: post_install_monitor.sh
+    dest: /usr/local/bin/post_install_monitor.sh
+    owner: root
+    group: root
+    mode: '0755'
+  tags: monitor
+
+- name: Start post-installation monitoring in background
+  shell: nohup /usr/local/bin/post_install_monitor.sh > /dev/null 2>&1 &
+  changed_when: false
+  tags: monitor
+
+- name: Inform about monitoring
+  debug:
+    msg:
+      - "Post-installation monitoring started in background for 30 minutes"
+      - "Logs will be written to /var/log/cluster_diagnostics/post_install_monitor.log"
+      - "Detailed diagnostics about watchdog will be captured automatically every 5 minutes"
+  tags: monitor
