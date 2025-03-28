@@ -2,16 +2,17 @@
 - name: Install required packages
   dnf:
     name:
-      - pcs
-      - pacemaker
-      - resource-agents
-      - fence-agents-all
-      - nfs-utils
-      - watchdog
-      - nmap-ncat
-      - kexec-tools
-      - policycoreutils-python-utils
-      - libselinux-utils     
+    - pcs
+    - pacemaker
+    - resource-agents
+    - fence-agents-all
+    - nfs-utils
+    - watchdog
+    - nmap-ncat
+    - kexec-tools
+    - policycoreutils-python-utils
+    - libselinux-utils
+    - util-linux
     state: present
   tags: packages
 
@@ -36,3 +37,4 @@
     enabled: yes
     state: started
   tags: services
+
