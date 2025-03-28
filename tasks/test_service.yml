@@ -51,14 +51,14 @@
   shell: pcs resource enable app_service
   run_once: true
   delegate_to: "{{ cluster_nodes[0].hostname }}"
-  ignore_errors: yes
+  ignore_errors: true
   tags: test_service
 
 - name: Cleanup resources
   shell: pcs resource cleanup
   run_once: true
   delegate_to: "{{ cluster_nodes[0].hostname }}"
-  ignore_errors: yes
+  ignore_errors: true
   tags: test_service
 
 # Tasks to create a simple test service
@@ -101,26 +101,26 @@
     content: |
       #!/bin/bash
       # Script to start the example service
-      
+
       PID_FILE="{{ app_pid_file }}"
       LOG_FILE="/var/log/{{ app_service_name }}/service.log"
-      
+
       # Create log directory if it does not exist
       mkdir -p /var/log/{{ app_service_name }}
-      
+
       # Write to the log
       echo "$(date): Starting test service {{ app_service_name }}..." >> $LOG_FILE
-      
+
       # Start a simple background process
       while true; do
           echo "$(date): Service {{ app_service_name }} running" >> $LOG_FILE
           sleep 30
       done &
-      
+
       # Save the PID
       echo $! > $PID_FILE
       chmod 644 $PID_FILE
-      
+
       echo "Service started with PID $(cat $PID_FILE)"
       exit 0
     dest: "{{ app_start_script }}"
@@ -134,14 +134,14 @@
     content: |
       #!/bin/bash
       # Script to stop the example service
-      
+
       PID_FILE="{{ app_pid_file }}"
       LOG_FILE="/var/log/{{ app_service_name }}/service.log"
-      
+
       if [ -f "$PID_FILE" ]; then
           PID=$(cat $PID_FILE)
           echo "$(date): Stopping service with PID $PID..." >> $LOG_FILE
-          
+
           # Check if the process exists
           if ps -p $PID > /dev/null; then
               kill $PID
@@ -149,13 +149,13 @@
           else
               echo "$(date): The process does not exist." >> $LOG_FILE
           fi
-          
+
           # Remove PID file
           rm -f $PID_FILE
       else
           echo "$(date): PID file not found." >> $LOG_FILE
       fi
-      
+
       exit 0
     dest: "{{ app_stop_script }}"
     owner: "{{ app_user }}"
