@@ -16,11 +16,11 @@ vi /etc/hosts
 192.168.6.37 virtual-ip
 
 # Configure firewall
-sudo firewall-cmd --permanent --add-service=high-availability
-sudo firewall-cmd --reload
+firewall-cmd --permanent --add-service=high-availability
+firewall-cmd --reload
 
 # Install software
-dnf install -y pcs pacemaker resource-agents watchdog fence-agents kexec-tools kdump-tools nfs-utils nmap-ncat 
+dnf install -y pcs pacemaker resource-agents watchdog fence-agents kexec-tools fence-agents-all nfs-utils nmap-ncat policycoreutils-python-utils libselinux-utils
 
 # Set password
 passwd hacluster
@@ -38,33 +38,66 @@ pcs cluster setup ha_cluster node1 node2
 pcs cluster enable --all
 pcs cluster start --all
 
-# Configure NFS
-dnf install -y nfs-utils
+mkdir -p /tmp/nfs_temp_mount
+mount -t nfs 192.168.4.36:/var/lib/vz/nfs-export/ /tmp/nfs_temp_mount
+mkdir -p /tmp/nfs_temp_mount/witness
+umount /tmp/nfs_temp_mount
 
+# On both nodes
 # Create nfs mount
-mkdir -p /ruta/instalacion/application
+mkdir -p /opt/nfs-shared
 
 # Create nfs witness directory
 mkdir -p /opt/nfs-witness
-mount -t nfs servidor_nfs:/ruta/compartida /opt/nfs-witness
+mount -t nfs 192.168.4.36:/var/lib/vz/nfs-export/witness /opt/nfs-witness
 
-# Create directory for heartbeat in nfs
-mkdir -p /opt/nfs-witness/witness
+# Create heartbeat-updater service
+
+vi /etc/systemd/system/heartbeat-updater.service
+-----
+[Unit]
+Description=Watchdog Heartbeat File Updater
+Before=watchdog.service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'while true; do touch /var/run/arbitrator-heartbeat; chmod 666 /var/run/arbitrator-heartbeat; sleep 30; done'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+-----
+
+systemctl daemon-reload
 
 # Load watchdog module
-sudo modprobe softdog
+modprobe softdog
 echo "softdog" | sudo tee -a /etc/modules-load.d/softdog.conf
 
 # Configure watchdog
 vi /etc/watchdog.conf
 
+---
 watchdog-device = /dev/watchdog
 interval = 10
 realtime = yes
 priority = 1
+pidfile = /run/watchdog.pid
 
-file = {{ watchdog_heartbeat_file }}
-change = {{ watchdog_heartbeat_change }}
+# Monitor arbitrator heartbeat file for changes
+file = /var/run/arbitrator-heartbeat
+change = 180
+---
+
+# Create cluster arbitrator script
+vi /usr/local/bin/network-watchdog.sh
+
+---
+File to long to put here
+Complete sample in the tests folder
+---
 
 # Enable watchdog service
 systemctl enable --now watchdog
@@ -75,34 +108,95 @@ vi /usr/local/bin/network-watchdog.sh
 # Make script executable
 chmod +x /usr/local/bin/network-watchdog.sh
 
-# Create script for stonith
-vi /usr/local/bin/fence-watchdog.sh
+# Create systemd service for watchdog
+vi /etc/systemd/system/network-watchdog.service
 
-# Make script executable
-chmod +x /usr/local/bin/fence-watchdog.sh
+----
+[Unit]
+Description=Cluster Network Watchdog Service
+After=network.target
+Before=watchdog.service
 
-# Configure cluster resources
-pcs property set no-quorum-policy=ignore
-pcs resource defaults migration-threshold=3
-pcs resource defaults failure-timeout=60s
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/network-watchdog.sh
 
-pcs stonith create fence-kdump fence_kdump pcmk_host_list="node1,node2" ipport=7410 action="reboot" pcmk_reboot_timeout=120s
+[Install]
+WantedBy=multi-user.target
+----
 
-# Uncomment the following line to enable the stonith agent
+# Create systemd timer for watchdog
+vi /etc/systemd/system/network-watchdog.timer
+
+----
+[Unit]
+Description=Run Cluster Network Watchdog every minute
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+
+[Install]
+WantedBy=timers.target
+----
+
+# Create temporary files for watchdog
+tee /etc/tmpfiles.d/watchdog.conf << EOF
+f /run/watchdog.pid 0666 root root
+f /run/arbitrator-heartbeat 0666 root root
+EOF
+
+systemd-tmpfiles --create
+
+# Create override for watchdog service
+mkdir -p /etc/systemd/system/watchdog.service.d/
+
+tee /etc/systemd/system/watchdog.service.d/override.conf << EOF
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/watchdog -c /etc/watchdog.conf -v -f
+EOF
+
+systemctl daemon-reload
+
+systemctl enable network-watchdog.timer
+systemctl start network-watchdog.timer
+
+systemctl enable heartbeat-updater
+systemctl start heartbeat-updater
+
+systemctl enable watchdog --now
+
+semanage permissive -a watchdog_t
+
+systemctl status watchdog
+systemctl stop watchdog
+
+# Configure kdump for stonith
 vi /etc/kdump.conf
 
-fence_kdump_args -p 7410
-fence_kdump_nodes node1 node2
+# Uncomment the following line to enable the stonith agent
+----
+fence_kdump_args -p 7410 -f auto -c 0 -i 10
+# In nodo1
+fence_kdump_nodes node2
+# In nodo2
+fence_kdump_nodes node1
+----
 
-systemctl restart kdump
+systemctl enable kdump --now
+systemctl status kdump
 
+# Configure cluster resources from node1
+pcs property set no-quorum-policy=ignore
 pcs property set stonith-enabled=true
+pcs stonith create fence-kdump fence_kdump pcmk_host_list="node1,node2" ipport=7410 pcmk_reboot_timeout=120s
 
 # Create VIP
 pcs resource create virtual_ip IPaddr2 ip=192.168.6.37 cidr_netmask=22 nic=ens18 op monitor interval=10s
 
 # Create resource for NFS
-pcs resource create fs_shared Filesystem device="servidor_nfs:/ruta/compartida" directory="/ruta/instalacion/application" fstype="nfs" options="noatime,sync" op monitor interval=20s
+pcs resource create fs_shared Filesystem device="192.168.4.36:/var/lib/vz/nfs-export" directory="/opt/nfs-shared" fstype="nfs" options="noatime,sync" op monitor interval=20s
 
 # Create systemd services files for apps to watch
 vi /etc/systemd/system/tomcat.service
@@ -180,3 +274,4 @@ pcs cluster stop --all
 
 # Start the cluster
 pcs cluster start --all
+
