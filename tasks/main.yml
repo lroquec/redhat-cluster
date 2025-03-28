@@ -23,9 +23,13 @@
   include_tasks: configure_resources.yml
   tags: resources
 
-- name: Include test service tasks
-  include_tasks: test_service.yml
-  tags: test_service
+# - name: Include test service tasks
+#   include_tasks: test_service.yml
+#   tags: test_service
+
+- name: Include diagnostic tools
+  include_tasks: diagnostics.yml
+  tags: diagnostics
 
 - name: Include validation tasks
   include_tasks: validate.yml
