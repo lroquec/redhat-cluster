@@ -4,4 +4,4 @@
 {% for node in cluster_nodes %}
 {{ node.ip }} {{ node.hostname }}
 {% endfor %}
-{{ virtual_ip }} virtual-ip
+{{ virtual_ip }} {{ dns_for_virtual_ip }}
