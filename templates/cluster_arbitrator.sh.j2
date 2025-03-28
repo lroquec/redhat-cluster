@@ -19,6 +19,7 @@
 # Configuration variables
 LOG_FILE="/var/log/cluster_arbitrator.log"
 NFS_WITNESS_DIR="{{ watchdog_nfs_witness_dir }}"       # NFS mount used as witness directory
+DNS_VIP="{{ dns_for_virtual_ip }}"                        # DNS for the virtual IP
 
 # Automatically determine the Gateway from the default route
 GATEWAY=$(ip route | grep '^default' | awk '{print $3}')
@@ -56,7 +57,7 @@ fi
 # If for some reason OTHER_NODE wasn't set by the above loop
 if [ -z "$OTHER_NODE" ]; then
     # Fallback to trying to determine from /etc/hosts
-    OTHER_NODE=$(grep -v "$HOSTNAME" /etc/hosts | grep -v "localhost" | grep -v "virtual-ip" | grep -v "\-mgmt" | head -n 1 | awk '{print $2}')
+    OTHER_NODE=$(grep -v "$HOSTNAME" /etc/hosts | grep -v "localhost" | grep -v "$DNS_VIP" | grep -v "\-mgmt" | head -n 1 | awk '{print $2}')
 
     if [ -z "$OTHER_NODE" ]; then
         echo "Error: Could not determine the other node's hostname" | logger -t cluster_arbitrator
@@ -247,7 +248,7 @@ check_peer_state() {
   local now diff
   now=$(date +%s)
   diff=$((now - other_timestamp))
-  log "info" "Peer state file is $diff seconds old."
+  log "info" "Peer state file is $diff seconds old (threshold: $STATE_THRESHOLD)."
   if [ $diff -le $STATE_THRESHOLD ]; then
     return 0
   else
@@ -256,15 +257,11 @@ check_peer_state() {
 }
 
 # Function to determine if this node is active.
-# We now check the actual cluster state instead of just the JSON file
 is_active_node() {
-  # First check the actual cluster state
-  if pcs node status "$HOSTNAME" 2>/dev/null | grep -q "Standby:.*on"; then
-    # If node is in standby according to the cluster, it's not active
-    return 1  # Not active (standby)
+  if pcs status nodes | grep "$HOSTNAME" | grep -i "Standby"; then
+    return 1  # Nodo en standby
   else
-    # If node is not in standby according to the cluster, it's active
-    return 0  # Active
+    return 0  # Nodo activo
   fi
 }
 
@@ -304,29 +301,33 @@ log "info" "Status check: Gateway=${gateway_status}, Arbitrator=${arbitrator_sta
 # Update the state file at the beginning if NFS is accessible
 if [ $nfs_status -eq 0 ]; then
   # Get the current node status from the cluster
-  if pcs node status "$HOSTNAME" 2>/dev/null | grep -q "Standby:.*on"; then
+  if pcs status nodes | grep "$HOSTNAME" | grep -i "Standby"; then
     log "info" "Node is in standby according to the cluster, updating state"
     update_state "standby"
-  else
-    log "info" "Node is active according to the cluster, updating state"
-    update_state "active"
-  fi
 
-  # If node is in standby and NFS is available, try to take it out of standby
-  if pcs node status "$HOSTNAME" 2>/dev/null | grep -q "Standby:.*on"; then
-    if ! pcs node status "$HOSTNAME" 2>/dev/null | grep -q "Maintenance:.*on"; then
+    # If node is in standby but not in maintenance, and NFS is available, try to take it out of standby
+    if ! pcs status nodes | grep "$HOSTNAME" | grep -i "maintenance"; then
       log "notice" "Node is in standby but not in maintenance, and NFS is available. Attempting to remove standby."
       if pcs node unstandby "$HOSTNAME"; then
         log "notice" "Successfully removed standby from node $HOSTNAME"
         update_state "active"
         log "notice" "State updated to active after removing standby"
-        exit 0
       else
         log "error" "Error trying to remove standby from node $HOSTNAME"
+
+        # Try an alternative command if the first one fails
+        if pcs cluster unstandby "$HOSTNAME" 2>/dev/null; then
+          log "notice" "Successfully removed standby using alternative command"
+          update_state "active"
+          log "notice" "State updated to active after removing standby"
+        fi
       fi
     else
       log "info" "Node is in maintenance mode, not attempting to remove standby"
     fi
+  else
+    log "info" "Node is active according to the cluster, updating state"
+    update_state "active"
   fi
 fi
 
