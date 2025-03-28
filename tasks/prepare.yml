@@ -5,9 +5,11 @@
     state: latest
   tags: update
 
-- name: Set hostname
+- name: Set hostname based on cluster_nodes definition
   hostname:
-    name: "{{ ansible_hostname }}"
+    name: "{{ item.hostname }}"
+  when: inventory_hostname == item.hostname
+  loop: "{{ cluster_nodes }}"
   tags: hostname
 
 - name: Configure /etc/hosts
