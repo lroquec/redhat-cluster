@@ -17,7 +17,6 @@
 #     mode: '0644'
 #   tags: services
 
----
 - name: Create virtual IP resource
   shell: pcs resource create virtual_ip IPaddr2 ip={{ virtual_ip }} cidr_netmask={{ virtual_ip_cidr }} nic={{ virtual_ip_interface }} op monitor interval={{ ip_monitor_interval }} --disabled
   run_once: true
@@ -56,14 +55,14 @@
   shell: pcs resource enable virtual_ip fs_shared
   run_once: true
   delegate_to: "{{ cluster_nodes[0].hostname }}"
-  ignore_errors: yes
+  ignore_errors: true
   tags: resources
 
 - name: Cleanup resources
   shell: pcs resource cleanup
   run_once: true
   delegate_to: "{{ cluster_nodes[0].hostname }}"
-  ignore_errors: yes
+  ignore_errors: true
   tags: resources
   
 # - name: Create tomcat service resource
