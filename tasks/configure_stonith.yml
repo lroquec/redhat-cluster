@@ -1,23 +1,21 @@
 ---
-# Simple STONITH configuration with fence_kdump
-
 - name: Install kdump packages
   dnf:
     name:
-      - kexec-tools
-      - fence-agents-kdump
+    - kexec-tools
+    - fence-agents-kdump
     state: present
   tags: stonith
 
 - name: Configure kdump.conf
   lineinfile:
     path: /etc/kdump.conf
-    regexp: "^#?{{ item.option }}"
+    regexp: "^#?{{ item.option | regex_escape() }}"
     line: "{{ item.option }}"
     state: present
   with_items:
-    - { option: "fence_kdump_args -p 7410" }
-    - { option: "fence_kdump_nodes {{ cluster_nodes | map(attribute='hostname') | join(' ') }}" }
+  - { option: "fence_kdump_args -p 7410 -f auto -c 0 -i 10" }
+  - { option: "fence_kdump_nodes {{ cluster_nodes | map(attribute='hostname') | reject('equalto', inventory_hostname) | join(' ') }}" }
   notify: restart kdump
   tags: stonith
 
@@ -28,21 +26,46 @@
     enabled: yes
   tags: stonith
 
+- name: Check if STONITH resource already exists
+  shell: pcs stonith show fence-kdump
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  register: stonith_check
+  changed_when: false
+  failed_when: false
+  ignore_errors: true
+  run_once: true
+  tags: stonith
+
 - name: Create STONITH resource with fence_kdump
   shell: >
-    pcs stonith create fence-kdump fence_kdump 
-    pcmk_host_list="{{ cluster_nodes | map(attribute='hostname') | join(',') }}" 
-    ipport=7410
+    pcs stonith create fence-kdump fence_kdump pcmk_host_list="{{ cluster_nodes | map(attribute='hostname') | join(',') }}" ipport=7410
   run_once: true
   delegate_to: "{{ cluster_nodes[0].hostname }}"
   register: create_stonith
   failed_when: create_stonith.rc != 0 and "already exists" not in create_stonith.stderr
-  changed_when: create_stonith.rc == 0
+  when: stonith_check.rc != 0
+  tags: stonith
+
+- name: Update STONITH resource with fence_kdump if it exists
+  shell: >
+    pcs stonith update fence-kdump pcmk_host_list="{{ cluster_nodes | map(attribute='hostname') | join(',') }}" ipport=7410
+  run_once: true
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  register: update_stonith
+  when: stonith_check.rc == 0
+  tags: stonith
+
+- name: Check if STONITH is enabled
+  shell: pcs property show stonith-enabled
+  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  register: stonith_enabled_check
+  changed_when: false
+  failed_when: false
+  run_once: true
   tags: stonith
 
 - name: Enable STONITH
   shell: pcs property set stonith-enabled=true
   run_once: true
   delegate_to: "{{ cluster_nodes[0].hostname }}"
-  changed_when: false
   tags: stonith
