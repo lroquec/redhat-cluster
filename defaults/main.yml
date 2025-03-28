@@ -2,7 +2,13 @@
 # Cluster configuration
 cluster_name: "ha_cluster"
 cluster_user: "hacluster"
-cluster_password: "clusterpass"  # Change this or use vault
+cluster_password: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          36646466383430396566333265636261656432373463373639303463343363333235363131613131
+          6462333862383762353662616636353030333031613934320a356461623031366434383065343066
+          31353162323665316362396365613932623336326263653864633862373732306663666232363633
+          3061336661643463320a616436316337333937306632333633386464326238643933623239373565
+          31383162323532353436656230396534313466363133356339393136336139383335
 
 # Cluster nodes
 cluster_nodes:
@@ -18,6 +24,7 @@ cluster_nodes:
 virtual_ip: "192.168.6.37"
 virtual_ip_cidr: "22"
 virtual_ip_interface: "ens18"  # Change to the appropriate interface
+dns_for_virtual_ip: "test.example.com"
 
 # NFS configuration
 nfs_server: "192.168.4.36"
@@ -27,7 +34,7 @@ mount_point: "/opt/nfs-shared"
 # Watchdog NFS arbitrator configuration
 watchdog_nfs_witness_dir: "/opt/nfs-witness"
 watchdog_active_nfs_failure_threshold: 60    # In seconds
-watchdog_standby_nfs_failure_threshold: 300  # In seconds
+watchdog_standby_nfs_failure_threshold: 180  # In seconds
 watchdog_state_threshold: 60                 # In seconds
 watchdog_arbitrator: "192.168.4.24"   # Hostname or IP
 
