@@ -2,7 +2,7 @@ watchdog-device = {{ watchdog_device }}
 interval = {{ watchdog_interval }}
 realtime = yes
 priority = 1
-pidfile = /var/run/watchdog.pid
+pidfile = /run/watchdog.pid
 
 # Monitor arbitrator heartbeat file for changes
 file = {{ watchdog_heartbeat_file }}
