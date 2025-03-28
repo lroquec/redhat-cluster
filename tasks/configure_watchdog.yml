@@ -128,6 +128,7 @@
     mode: '0644'
   tags: watchdog
 
+# Ensure files are created right now
 - name: Create necessary directories and files for watchdog
   file:
     path: "{{ item.path }}"
@@ -136,15 +137,16 @@
     owner: root
     group: root
   with_items:
-    - { path: "/var/run/watchdog.pid", state: "touch", mode: '0666' }
-    - { path: "/var/run/arbitrator-heartbeat", state: "touch", mode: '0666' }
+  - { path: "/run/watchdog.pid", state: "touch", mode: '0666' }
+  - { path: "/var/run/arbitrator-heartbeat", state: "touch", mode: '0666' }
   tags: watchdog
 
+# Ensure files are created right at boot
 - name: Create systemd-tmpfiles configuration for watchdog
   copy:
     content: |
-      f /var/run/watchdog.pid 0666 root root
-      f /var/run/arbitrator-heartbeat 0666 root root
+      f /run/watchdog.pid 0666 root root
+      f /run/arbitrator-heartbeat 0666 root root
     dest: /etc/tmpfiles.d/watchdog-permissions.conf
     owner: root
     group: root
@@ -170,7 +172,7 @@
     owner: root
     group: root
     mode: '0644'
-  notify: restart watchdog
+  # notify: restart watchdog
   tags: watchdog
 
 - name: Create custom SELinux module source file for watchdog
@@ -199,8 +201,9 @@
               type firewalld_t;
               type rpcbind_t;
               type initrc_var_run_t;
-              class file { getattr open read };
-              class dir search;
+              type file_t;
+              class file { getattr open read write create unlink };
+              class dir { search write add_name remove_name };
       }
 
       #============= watchdog_t ==============
@@ -222,7 +225,10 @@
       allow watchdog_t udev_t:dir search;
       allow watchdog_t initrc_var_run_t:file { open read };
       allow watchdog_t initrc_var_run_t:file getattr;
-      allow watchdog_t var_run_t:file getattr;
+      allow watchdog_t kernel_t:file { getattr open read };
+      allow watchdog_t var_run_t:file { getattr open read write create unlink };
+      allow watchdog_t var_run_t:dir { search write add_name remove_name };
+      allow watchdog_t file_t:file { getattr open read };
   tags: selinux
 
 - name: Compile the SELinux module source to a module file
@@ -241,6 +247,20 @@
   command: semodule -i /tmp/watchdog_custom.pp
   tags: selinux
 
+- name: Set permissive mode for watchdog type as fallback
+  shell: |
+    # Only try to set permissive mode if the type exists and is not already permissive
+    if seinfo -t 2>/dev/null | grep -q watchdog_t && ! semanage permissive -l 2>/dev/null | grep -q watchdog_t; then
+      semanage permissive -a watchdog_t
+      echo "Set permissive mode for watchdog_t"
+    else
+      echo "Cannot set permissive mode (type does not exist or already permissive)"
+    fi
+  register: selinux_permissive
+  changed_when: "'Set permissive mode for watchdog_t' in selinux_permissive.stdout"
+  failed_when: false
+  tags: selinux
+
 - name: Enable and start watchdog timer
   systemd:
     name: network-watchdog.timer
@@ -249,9 +269,34 @@
     daemon_reload: yes
   tags: watchdog
 
+- name: Apply systemd-tmpfiles configuration immediately
+  command: systemd-tmpfiles --create
+  changed_when: false
+  tags: watchdog
+
+- name: Ensure heartbeat-updater service is running before watchdog
+  systemd:
+    name: heartbeat-updater
+    state: started
+    enabled: yes
+  tags: watchdog
+
+- name: Wait a moment for heartbeat file to be established
+  pause:
+    seconds: 5
+  tags: watchdog
+
+- name: Update heartbeat file manually to ensure freshness
+  shell: |
+    touch {{ watchdog_heartbeat_file }}
+    chmod 666 {{ watchdog_heartbeat_file }}
+    ls -la {{ watchdog_heartbeat_file }}
+  changed_when: false
+  tags: watchdog
+
 - name: Enable and start watchdog service
   systemd:
     name: watchdog
     enabled: yes
-    state: started
-  tags: watchdog 
+    state: stopped
+  tags: watchdog
