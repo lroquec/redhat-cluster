@@ -1,0 +1,73 @@
+---
+# Tasks to install the reboot control system
+- name: Create directory for watchdog persistent data
+  ansible.builtin.file:
+    path: /var/lib/watchdog
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  tags: reboot_control
+
+- name: Install reboot control script
+  ansible.builtin.template:
+    src: watchdog-reboot-control.sh.j2
+    dest: /usr/local/bin/watchdog-reboot-control.sh
+    mode: '0755'
+    owner: root
+    group: root
+  tags: reboot_control
+
+- name: Install counter reset script
+  ansible.builtin.template:
+    src: watchdog-reset.sh.j2
+    dest: /usr/local/bin/watchdog-reset
+    mode: '0755'
+    owner: root
+    group: root
+  tags: reboot_control
+
+- name: Install monitoring script
+  ansible.builtin.template:
+    src: watchdog-monitor.sh.j2
+    dest: /usr/local/bin/watchdog-monitor.sh
+    mode: '0755'
+    owner: root
+    group: root
+  tags: reboot_control
+
+- name: Install systemd service for monitor
+  ansible.builtin.template:
+    src: watchdog-monitor.service.j2
+    dest: /etc/systemd/system/watchdog-monitor.service
+    mode: '0644'
+    owner: root
+    group: root
+  tags: reboot_control
+
+- name: Install systemd timer for monitor
+  ansible.builtin.template:
+    src: watchdog-monitor.timer.j2
+    dest: /etc/systemd/system/watchdog-monitor.timer
+    mode: '0644'
+    owner: root
+    group: root
+  tags: reboot_control
+
+- name: Enable and start monitor timer
+  ansible.builtin.systemd:
+    name: watchdog-monitor.timer
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  tags: reboot_control
+
+- name: Update watchdog configuration to use reboot control script
+  ansible.builtin.template:
+    src: watchdog.conf.j2
+    dest: /etc/watchdog.conf
+    mode: '0644'
+    owner: root
+    group: root
+  tags: reboot_control
+  notify: restart watchdog
