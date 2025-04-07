@@ -7,29 +7,30 @@
 # For an ACTIVE node:
 #   - If the gateway (auto-detected), the arbitrator (responding via SSH), and NFS (read/write)
 #     are all operational, then no action is taken.
-#   - If NFS is not accessible for more than {{ watchdog_active_nfs_failure_threshold }} seconds, the node transitions to standby.
+#   - If NFS is not accessible for more than {{ infra__redhat_cluster_watchdog_active_nfs_failure_threshold }} seconds, the node transitions to standby.
 #
 # For a STANDBY node:
 #   - If the gateway, arbitrator, and NFS are accessible, then the peer's state file on NFS
-#     is checked. If the peer's state file has not been updated for over {{ watchdog_state_threshold }} seconds, the node
+#     is checked. If the peer's state file has not been updated for over {{ infra__redhat_cluster_watchdog_state_threshold }} seconds, the node
 #     assumes the peer is down and acquires cluster resources.
-#   - If NFS is not accessible for more than {{ watchdog_standby_nfs_failure_threshold }} seconds, the node reboots.
+#   - If NFS is not accessible for more than {{ infra__redhat_cluster_watchdog_standby_nfs_failure_threshold }} seconds, the node reboots
+#     BUT ONLY IF the reboot count is less than the maximum allowed (3 by default).
 #
 
 # Configuration variables
 LOG_FILE="/var/log/cluster_arbitrator.log"
-NFS_WITNESS_DIR="{{ watchdog_nfs_witness_dir }}"       # NFS mount used as witness directory
-DNS_VIP="{{ dns_for_virtual_ip }}"                        # DNS for the virtual IP
+NFS_WITNESS_DIR="{{ infra__redhat_cluster_watchdog_nfs_witness_dir }}"       # NFS mount used as witness directory
+DNS_VIP="{{ infra__redhat_cluster_dns_for_virtual_ip }}"                        # DNS for the virtual IP
 
 # Automatically determine the Gateway from the default route
 GATEWAY=$(ip route | grep '^default' | awk '{print $3}')
-ARBITRATOR="{{ watchdog_arbitrator }}"        # Set arbitrator hostname or IP as appropriate
+ARBITRATOR="{{ infra__redhat_cluster_watchdog_arbitrator }}"        # Set arbitrator hostname or IP as appropriate
 
 # Hostname variables from cluster_nodes
 # Determine current node based on actual hostname
 CURRENT_HOSTNAME=$(hostname)
 
-{% for node in cluster_nodes %}
+{% for node in infra__redhat_cluster_nodes %}
 if [[ "$CURRENT_HOSTNAME" == "{{ node.hostname }}" ]]; then
     HOSTNAME="{{ node.hostname }}"
     NODE_IP="{{ node.ip }}"
@@ -39,14 +40,14 @@ fi
 # If HOSTNAME isn't set, fall back to current hostname
 if [ -z "$HOSTNAME" ]; then
     HOSTNAME="$CURRENT_HOSTNAME"
-    echo "Warning: Could not find hostname in cluster_nodes config. Using current hostname: $HOSTNAME" | logger -t cluster_arbitrator
+    echo "Warning: Could not find hostname in infra__redhat_cluster_nodes config. Using current hostname: $HOSTNAME" | logger -t cluster_arbitrator
 fi
 
 # Use a unique test file for each node to avoid race conditions
 WITNESS_FILE="witness_test_${HOSTNAME}.tmp"    # Unique temporary file name for NFS read/write test
 
 # Configure other node directly from cluster_nodes variable
-{% for node in cluster_nodes %}
+{% for node in infra__redhat_cluster_nodes %}
 # Checking if this is the other node
 if [[ "{{ node.hostname }}" != "$HOSTNAME" ]]; then
     OTHER_NODE="{{ node.hostname }}"
@@ -65,18 +66,30 @@ if [ -z "$OTHER_NODE" ]; then
     fi
 fi
 
-STATE_THRESHOLD={{ watchdog_state_threshold }}                        # Threshold (in seconds) for peer state file freshness
-ACTIVE_NFS_FAILURE_THRESHOLD={{ watchdog_active_nfs_failure_threshold }}           # For active node: if NFS fails for >60 seconds, go standby
-STANDBY_NFS_FAILURE_THRESHOLD={{ watchdog_standby_nfs_failure_threshold }}         # For standby node: if NFS fails for >300 seconds, reboot
+STATE_THRESHOLD={{ infra__redhat_cluster_watchdog_state_threshold }}                        # Threshold (in seconds) for peer state file freshness
+ACTIVE_NFS_FAILURE_THRESHOLD={{ infra__redhat_cluster_watchdog_active_nfs_failure_threshold }}           # For active node: if NFS fails for >60 seconds, go standby
+STANDBY_NFS_FAILURE_THRESHOLD={{ infra__redhat_cluster_watchdog_standby_nfs_failure_threshold }}         # For standby node: if NFS fails for >300 seconds, reboot
 
 # File to track when NFS failures begin
 NFS_FAILURE_FILE="/var/run/nfs_failure.timestamp"
 
 # Create/update heartbeat file for hardware watchdog
-touch {{ watchdog_heartbeat_file }}
+touch {{ infra__redhat_cluster_watchdog_heartbeat_file }}
 
 SELF_STATE_FILE="${NFS_WITNESS_DIR}/${HOSTNAME}_state.json"
 OTHER_STATE_FILE="${NFS_WITNESS_DIR}/${OTHER_NODE}_state.json"
+
+# ===== REBOOT CONTROL CONFIGURATION =====
+# These settings control any reboot triggered by the watchdog system
+MAX_REBOOTS=3                               # Maximum number of automatic reboots allowed
+REBOOT_COUNT_FILE="/var/lib/watchdog/reboot_count"   # File to track reboot count (using persistent directory)
+REBOOT_TIMESTAMP_FILE="/var/lib/watchdog/last_reboot_time"  # Last reboot timestamp
+REBOOT_REASON_FILE="/var/lib/watchdog/last_reboot_reason"   # Last reboot reason
+HEALTHY_HOURS_TO_RESET=6                    # Hours of healthy operation before counter reset
+HEALTHY_STATE_FILE="/var/lib/watchdog/healthy_since"      # When the system became healthy
+
+# Ensure watchdog state directory exists
+mkdir -p /var/lib/watchdog 2>/dev/null
 
 # Logging function: writes to both a log file and the system logger
 log() {
@@ -98,6 +111,10 @@ log() {
       echo "Arbitrator status: $(check_arbitrator && echo 'UP' || echo 'DOWN')"
       echo "NFS status: $(check_nfs_rw && echo 'OK' || echo 'FAILED')"
       echo "NFS failure duration: $(get_nfs_failure_duration) seconds"
+      echo "Reboot count: $(get_reboot_count)/${MAX_REBOOTS}"
+      echo "Last reboot time: $(get_last_reboot_time)"
+      echo "Last reboot reason: $(get_last_reboot_reason)"
+      echo "Healthy since: $(get_healthy_since)"
       echo "Mount points:"
       mount | grep nfs
       echo "Peer state file:"
@@ -120,6 +137,157 @@ log() {
       tail -n 20 /var/log/messages 2>/dev/null || journalctl -n 20 2>/dev/null
       echo "-------- END DIAGNOSTIC INFO --------"
     } >> "${LOG_FILE}.diagnostics.$(date +%s)"
+  fi
+}
+
+# ===== REBOOT CONTROL FUNCTIONS =====
+
+# Function to get current reboot count
+get_reboot_count() {
+  if [ -f "$REBOOT_COUNT_FILE" ]; then
+    cat "$REBOOT_COUNT_FILE"
+  else
+    echo "0" > "$REBOOT_COUNT_FILE"
+    echo "0"
+  fi
+}
+
+# Function to increment reboot count and record details
+increment_reboot_count() {
+  local reason="$1"
+  local count
+
+  # Ensure the count file exists
+  if [ -f "$REBOOT_COUNT_FILE" ]; then
+    count=$(cat "$REBOOT_COUNT_FILE")
+    # Validate it's a number
+    if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+      count=0
+    fi
+    count=$((count + 1))
+  else
+    count=1
+  fi
+
+  # Save the new count
+  echo "$count" > "$REBOOT_COUNT_FILE"
+
+  # Record timestamp and reason
+  date +%s > "$REBOOT_TIMESTAMP_FILE"
+  echo "$reason" > "$REBOOT_REASON_FILE"
+
+  log "warning" "Incremented reboot counter to $count of $MAX_REBOOTS (Reason: $reason)"
+  return 0
+}
+
+# Function to reset reboot count
+reset_reboot_count() {
+  if [ -f "$REBOOT_COUNT_FILE" ]; then
+    local old_count=$(cat "$REBOOT_COUNT_FILE")
+    echo "0" > "$REBOOT_COUNT_FILE"
+    log "info" "Reset reboot counter from $old_count to 0"
+  fi
+}
+
+# Function to check if we should allow a reboot
+should_allow_reboot() {
+  local count=$(get_reboot_count)
+  if [ "$count" -lt "$MAX_REBOOTS" ]; then
+    return 0  # Yes, we can reboot
+  else
+    log "alert" "Reboot limit reached ($count of $MAX_REBOOTS). Will NOT reboot."
+    return 1  # No, don't reboot
+  fi
+}
+
+# Function to track system healthy state
+mark_system_healthy() {
+  local now=$(date +%s)
+  if [ ! -f "$HEALTHY_STATE_FILE" ]; then
+    echo "$now" > "$HEALTHY_STATE_FILE"
+    log "info" "System marked as healthy at $(date)"
+  else
+    # Check if we need to reset the reboot counter after extended healthy period
+    local healthy_since=$(cat "$HEALTHY_STATE_FILE")
+    local healthy_duration=$((now - healthy_since))
+    local hours_threshold=$((HEALTHY_HOURS_TO_RESET * 3600))
+
+    if [ "$healthy_duration" -ge "$hours_threshold" ]; then
+      if [ "$(get_reboot_count)" -gt "0" ]; then
+        reset_reboot_count
+        log "notice" "System has been healthy for $HEALTHY_HOURS_TO_RESET hours, reset reboot counter."
+      fi
+    fi
+  fi
+}
+
+# Function to clear healthy state
+clear_healthy_state() {
+  if [ -f "$HEALTHY_STATE_FILE" ]; then
+    rm -f "$HEALTHY_STATE_FILE"
+  fi
+}
+
+# Function to get human-readable time since system was healthy
+get_healthy_since() {
+  if [ -f "$HEALTHY_STATE_FILE" ]; then
+    local since=$(cat "$HEALTHY_STATE_FILE")
+    local now=$(date +%s)
+    local duration=$((now - since))
+    local hours=$((duration / 3600))
+    local minutes=$(((duration % 3600) / 60))
+
+    echo "${hours}h ${minutes}m (since $(date -d @${since}))"
+  else
+    echo "Unknown"
+  fi
+}
+
+# Function to get the last reboot time
+get_last_reboot_time() {
+  if [ -f "$REBOOT_TIMESTAMP_FILE" ]; then
+    local timestamp=$(cat "$REBOOT_TIMESTAMP_FILE")
+    date -d @${timestamp} 2>/dev/null || echo "Unknown"
+  else
+    echo "None recorded"
+  fi
+}
+
+# Function to get the last reboot reason
+get_last_reboot_reason() {
+  if [ -f "$REBOOT_REASON_FILE" ]; then
+    cat "$REBOOT_REASON_FILE"
+  else
+    echo "None recorded"
+  fi
+}
+
+# Function to perform a controlled reboot with reason tracking
+do_reboot() {
+  local reason="$1"
+
+  # Check if we're allowed to reboot
+  if should_allow_reboot; then
+    # Increment counter and record reason before rebooting
+    increment_reboot_count "$reason"
+
+    log "alert" "Will reboot in 10 seconds. Reason: $reason (reboot count: $(get_reboot_count)/${MAX_REBOOTS})"
+
+    # Save complete cluster status
+    pcs status > "${LOG_FILE}.preboot_cluster_status.$(date +%s)" 2>/dev/null
+
+    # Detailed log of critical services
+    systemctl status watchdog heartbeat-updater network-watchdog pcsd corosync pacemaker > "${LOG_FILE}.preboot_services.$(date +%s)" 2>/dev/null
+
+    # Wait before reboot to allow logs to be written
+    sleep 10
+
+    log "emerg" "REBOOTING NODE. Reason: $reason (reboot count: $(get_reboot_count)/${MAX_REBOOTS})"
+    /sbin/reboot -f
+  else
+    log "alert" "NOT REBOOTING: Reached maximum reboot attempts ($(get_reboot_count)/${MAX_REBOOTS})"
+    log "alert" "Manual intervention required - Issue: $reason"
+    return 1
   fi
 }
 
@@ -298,6 +466,13 @@ check_nfs_rw && nfs_status=0 || nfs_status=1
 
 log "info" "Status check: Gateway=${gateway_status}, Arbitrator=${arbitrator_status}, NFS=${nfs_status}"
 
+# If everything is healthy, mark the system as healthy
+if [ $gateway_status -eq 0 ] && [ $arbitrator_status -eq 0 ] && [ $nfs_status -eq 0 ]; then
+  mark_system_healthy
+else
+  clear_healthy_state
+fi
+
 # Update the state file at the beginning if NFS is accessible
 if [ $nfs_status -eq 0 ]; then
   # Get the current node status from the cluster
@@ -370,12 +545,8 @@ else
     duration=$(get_nfs_failure_duration)
     log "warning" "Standby node: NFS failure detected for $duration seconds."
     if [ "$duration" -ge "$STANDBY_NFS_FAILURE_THRESHOLD" ]; then
-      log "alert" "Standby node: NFS failure exceeded threshold (${duration}s > ${STANDBY_NFS_FAILURE_THRESHOLD}s). WOULD REBOOT node."
+      log "alert" "Standby node: NFS failure exceeded threshold (${duration}s > ${STANDBY_NFS_FAILURE_THRESHOLD}s)."
       log "alert" "*** IMPORTANT: Recording diagnostic information before potential reboot ***"
-      # Save complete cluster status
-      pcs status > "${LOG_FILE}.preboot_cluster_status.$(date +%s)" 2>/dev/null
-      # Detailed log of critical services
-      systemctl status watchdog heartbeat-updater network-watchdog pcsd corosync pacemaker > "${LOG_FILE}.preboot_services.$(date +%s)" 2>/dev/null
 
       # Try to resolve the issue before rebooting
       log "notice" "Attempt recovery: Forcing resource cleanup"
@@ -390,13 +561,12 @@ else
         log "notice" "NFS is now accessible after cleanup! Aborting reboot."
         clear_nfs_failure
       else
-        log "alert" "NFS still unavailable after cleanup. Will reboot in 10 seconds unless interrupted."
-        sleep 10
-        log "emerg" "REBOOTING NODE due to persistent NFS failure"
-        /sbin/reboot -f
+        # Use the centralized reboot function
+        do_reboot "NFS failure for ${duration}s"
       fi
     fi
   fi
 fi
 
 exit 0
+
