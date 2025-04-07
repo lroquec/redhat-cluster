@@ -1,0 +1,10 @@
+[Unit]
+Description=Monitor for reboot watchdog system
+After=network.target
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target
