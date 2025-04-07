@@ -1,0 +1,11 @@
+---
+- name: Copy cluster_test.sh template to /usr/local/bin/cluster_test.sh on localhost
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.template:
+    src: cluster_test.sh.j2
+    dest: /usr/local/bin/cluster_tests
+    owner: root
+    group: root
+    mode: '0755'
+  tags: cluster_test
