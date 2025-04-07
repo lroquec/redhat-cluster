@@ -1,58 +1,58 @@
 ---
 - name: Temporarily mount NFS share
-  mount:
+  ansible.builtin.mount:
     path: "/tmp/nfs_temp_mount"
-    src: "{{ nfs_server }}:{{ nfs_share }}"
+    src: "{{ infra__redhat_cluster_nfs_server }}:{{ infra__redhat_cluster_nfs_share }}"
     fstype: nfs
     opts: "noatime,sync"
     state: mounted
   run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
   tags: watchdog
 
 - name: Create witness directory on NFS
-  file:
+  ansible.builtin.file:
     path: "/tmp/nfs_temp_mount/witness"
     state: directory
     mode: "0755"
   run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
   tags: watchdog
 
 - name: Unmount temporary NFS share
-  mount:
+  ansible.builtin.mount:
     path: "/tmp/nfs_temp_mount"
     state: unmounted
   run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
   tags: watchdog
 
 - name: Remove temporary mount point
-  file:
+  ansible.builtin.file:
     path: "/tmp/nfs_temp_mount"
     state: absent
   run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
   tags: watchdog
 
 - name: Create mount point for witness
-  file:
-    path: "{{ watchdog_nfs_witness_dir }}"
+  ansible.builtin.file:
+    path: "{{ infra__redhat_cluster_watchdog_nfs_witness_dir }}"
     state: directory
     mode: "0755"
   tags: watchdog
 
 - name: Mount NFS witness directory
-  mount:
-    path: "{{ watchdog_nfs_witness_dir }}"
-    src: "{{ nfs_server }}:{{ nfs_share }}/witness"
+  ansible.builtin.mount:
+    path: "{{ infra__redhat_cluster_watchdog_nfs_witness_dir }}"
+    src: "{{ infra__redhat_cluster_nfs_server }}:{{ infra__redhat_cluster_nfs_share }}/witness"
     fstype: nfs
     opts: "noatime,sync"
     state: mounted
   tags: watchdog
 
 - name: Create heartbeat-updater systemd service file
-  copy:
+  ansible.builtin.copy:
     dest: /etc/systemd/system/heartbeat-updater.service
     content: |
       [Unit]
@@ -74,7 +74,7 @@
   tags: heartbeat
 
 - name: Reload systemd daemon and enable/start heartbeat-updater service
-  systemd:
+  ansible.builtin.systemd:
     name: heartbeat-updater.service
     enabled: yes
     state: started
@@ -82,18 +82,18 @@
   tags: heartbeat
 
 - name: Wait for heartbeat to be updated at least once
-  wait_for:
+  ansible.builtin.wait_for:
     path: /var/run/arbitrator-heartbeat
     state: present
   tags: heartbeat
 
 - name: Pause to ensure heartbeat file is updated
-  pause:
+  ansible.builtin.pause:
     seconds: 5
   tags: heartbeat
 
 - name: Configure watchdog service
-  template:
+  ansible.builtin.template:
     src: watchdog.conf.j2
     dest: /etc/watchdog.conf
     owner: root
@@ -102,7 +102,7 @@
   tags: watchdog
 
 - name: Create cluster arbitrator script from template
-  template:
+  ansible.builtin.template:
     src: cluster_arbitrator.sh.j2
     dest: /usr/local/bin/network-watchdog.sh
     owner: root
@@ -111,7 +111,7 @@
   tags: watchdog
 
 - name: Create watchdog systemd service file
-  template:
+  ansible.builtin.template:
     src: network-watchdog.service.j2
     dest: /etc/systemd/system/network-watchdog.service
     owner: root
@@ -120,7 +120,7 @@
   tags: watchdog
 
 - name: Create watchdog systemd timer file
-  template:
+  ansible.builtin.template:
     src: network-watchdog.timer.j2
     dest: /etc/systemd/system/network-watchdog.timer
     owner: root
@@ -128,22 +128,30 @@
     mode: '0644'
   tags: watchdog
 
-# Ensure files are created right now
+# Ensure files are created right now if not present
+- name: Check if watchdog files exist
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  with_items:
+    - "/run/watchdog.pid"
+    - "/var/run/arbitrator-heartbeat"
+  register: watchdog_files
+  tags: watchdog
+
 - name: Create necessary directories and files for watchdog
-  file:
-    path: "{{ item.path }}"
-    state: "{{ item.state }}"
-    mode: "{{ item.mode }}"
+  ansible.builtin.file:
+    path: "{{ item.item }}"
+    state: touch
+    mode: '0666'
     owner: root
     group: root
-  with_items:
-  - { path: "/run/watchdog.pid", state: "touch", mode: '0666' }
-  - { path: "/var/run/arbitrator-heartbeat", state: "touch", mode: '0666' }
+  with_items: "{{ watchdog_files.results }}"
+  when: not item.stat.exists
   tags: watchdog
 
 # Ensure files are created right at boot
 - name: Create systemd-tmpfiles configuration for watchdog
-  copy:
+  ansible.builtin.copy:
     content: |
       f /run/watchdog.pid 0666 root root
       f /run/arbitrator-heartbeat 0666 root root
@@ -154,7 +162,7 @@
   tags: watchdog
 
 - name: Create systemd override directory for watchdog
-  file:
+  ansible.builtin.file:
     path: /etc/systemd/system/watchdog.service.d
     state: directory
     mode: '0755'
@@ -163,7 +171,7 @@
   tags: watchdog
 
 - name: Create systemd override for watchdog
-  copy:
+  ansible.builtin.copy:
     content: |
       [Service]
       ExecStart=
@@ -176,7 +184,7 @@
   tags: watchdog
 
 - name: Create custom SELinux module source file for watchdog
-  copy:
+  ansible.builtin.copy:
     dest: /tmp/watchdog_custom.te
     content: |
       module watchdog_custom 1.0;
@@ -232,23 +240,23 @@
   tags: selinux
 
 - name: Compile the SELinux module source to a module file
-  command: checkmodule -M -m -o /tmp/watchdog_custom.mod /tmp/watchdog_custom.te
+  ansible.builtin.command: checkmodule -M -m -o /tmp/watchdog_custom.mod /tmp/watchdog_custom.te
   args:
     creates: /tmp/watchdog_custom.mod
   tags: selinux
 
 - name: Package the SELinux module into a policy package (.pp)
-  command: semodule_package -o /tmp/watchdog_custom.pp -m /tmp/watchdog_custom.mod
+  ansible.builtin.command: semodule_package -o /tmp/watchdog_custom.pp -m /tmp/watchdog_custom.mod
   args:
     creates: /tmp/watchdog_custom.pp
   tags: selinux
 
 - name: Install the custom SELinux module for watchdog
-  command: semodule -i /tmp/watchdog_custom.pp
+  ansible.builtin.command: semodule -i /tmp/watchdog_custom.pp
   tags: selinux
 
 - name: Set permissive mode for watchdog type as fallback
-  shell: |
+  ansible.builtin.shell: |
     # Only try to set permissive mode if the type exists and is not already permissive
     if seinfo -t 2>/dev/null | grep -q watchdog_t && ! semanage permissive -l 2>/dev/null | grep -q watchdog_t; then
       semanage permissive -a watchdog_t
@@ -262,7 +270,7 @@
   tags: selinux
 
 - name: Enable and start watchdog timer
-  systemd:
+  ansible.builtin.systemd:
     name: network-watchdog.timer
     enabled: yes
     state: started
@@ -270,33 +278,33 @@
   tags: watchdog
 
 - name: Apply systemd-tmpfiles configuration immediately
-  command: systemd-tmpfiles --create
+  ansible.builtin.command: systemd-tmpfiles --create
   changed_when: false
   tags: watchdog
 
 - name: Ensure heartbeat-updater service is running before watchdog
-  systemd:
+  ansible.builtin.systemd:
     name: heartbeat-updater
     state: started
     enabled: yes
   tags: watchdog
 
 - name: Wait a moment for heartbeat file to be established
-  pause:
+  ansible.builtin.pause:
     seconds: 5
   tags: watchdog
 
 - name: Update heartbeat file manually to ensure freshness
-  shell: |
-    touch {{ watchdog_heartbeat_file }}
-    chmod 666 {{ watchdog_heartbeat_file }}
-    ls -la {{ watchdog_heartbeat_file }}
+  ansible.builtin.shell: |
+    touch {{ infra__redhat_cluster_watchdog_heartbeat_file }}
+    chmod 666 {{ infra__redhat_cluster_watchdog_heartbeat_file }}
+    ls -la {{ infra__redhat_cluster_watchdog_heartbeat_file }}
   changed_when: false
   tags: watchdog
 
-- name: Enable and start watchdog service
-  systemd:
+- name: Configure watchdog service state
+  ansible.builtin.systemd:
     name: watchdog
     enabled: yes
-    state: stopped
+    state: "{{ 'started' if infra__redhat_cluster_watchdog_enabled_by_default else 'stopped' }}"
   tags: watchdog
