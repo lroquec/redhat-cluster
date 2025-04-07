@@ -1,0 +1,115 @@
+#!/bin/bash
+#
+# watchdog-monitor.sh
+#
+# Script to install a status monitor that automatically
+# resets the reboot counter after a period
+# of stable system operation
+#
+
+# Configuration
+REBOOT_COUNT_FILE="/var/lib/watchdog/reboot_count"
+HEALTHY_STATE_FILE="/var/lib/watchdog/healthy_since"
+REBOOT_BLOCKED_FILE="/var/lib/watchdog/reboot_blocked"
+HOURS_TO_RESET=6          # Hours of stable operation to reset the counter
+LOG_FILE="/var/log/watchdog-monitor.log"
+
+# Logging function
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
+  logger -t watchdog-monitor -p daemon.info "$1"
+}
+
+# Check critical cluster resources
+check_cluster_health() {
+  # Check NFS status
+  if ! findmnt -t nfs,nfs4 "{{ infra__redhat_cluster_watchdog_nfs_witness_dir }}" > /dev/null 2>&1; then
+    log "ERROR: NFS is not mounted correctly"
+    return 1
+  fi
+
+  # Check gateway connectivity
+  GATEWAY=$(ip route | grep '^default' | awk '{print $3}')
+  if ! ping -c 1 -W 2 "$GATEWAY" > /dev/null 2>&1; then
+    log "ERROR: No connectivity with gateway $GATEWAY"
+    return 1
+  fi
+
+  # Check arbitrator connectivity
+  if ! nc -z -w3 "{{ infra__redhat_cluster_watchdog_arbitrator }}" 22 > /dev/null 2>&1; then
+    log "ERROR: No connectivity with arbitrator {{ infra__redhat_cluster_watchdog_arbitrator }}"
+    return 1
+  fi
+
+  # Check cluster services
+  for service in pcsd corosync pacemaker; do
+    if ! systemctl is-active --quiet $service; then
+      log "ERROR: Service $service is not active"
+      return 1
+    fi
+  done
+
+  # If we get here, everything is fine
+  return 0
+}
+
+# Mark system as healthy
+mark_healthy() {
+  local now=$(date +%s)
+
+  if [ ! -f "$HEALTHY_STATE_FILE" ]; then
+    echo "$now" > "$HEALTHY_STATE_FILE"
+    log "System marked as healthy"
+  fi
+}
+
+# Clear healthy state
+clear_healthy() {
+  if [ -f "$HEALTHY_STATE_FILE" ]; then
+    rm -f "$HEALTHY_STATE_FILE"
+    log "Healthy state cleared due to detected issues"
+  fi
+}
+
+# Check if counter should be reset
+check_reset_counter() {
+  if [ ! -f "$HEALTHY_STATE_FILE" ] || [ ! -f "$REBOOT_COUNT_FILE" ]; then
+    return 1
+  fi
+
+  local healthy_since=$(cat "$HEALTHY_STATE_FILE")
+  local now=$(date +%s)
+  local duration=$((now - healthy_since))
+  local reset_threshold=$((HOURS_TO_RESET * 3600))
+  local current_count=$(cat "$REBOOT_COUNT_FILE")
+
+  # Only reset if counter is greater than 0 and system has been
+  # healthy for the required time
+  if [ "$duration" -ge "$reset_threshold" ] && [ "$current_count" -gt "0" ]; then
+    echo "0" > "$REBOOT_COUNT_FILE"
+
+    # If there was a block, remove it
+    if [ -f "$REBOOT_BLOCKED_FILE" ]; then
+      rm -f "$REBOOT_BLOCKED_FILE"
+    fi
+
+    log "Reboot counter automatically reset after $HOURS_TO_RESET hours of stable operation"
+    return 0
+  fi
+
+  return 1
+}
+
+# Main execution
+log "Starting watchdog status monitor"
+
+# Check cluster health
+if check_cluster_health; then
+  mark_healthy
+  check_reset_counter
+else
+  clear_healthy
+  log "System unhealthy, counter will not be reset"
+fi
+
+exit 0
