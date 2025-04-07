@@ -1,51 +1,65 @@
 ---
-- name: Update all packages
-  dnf:
-    name: "*"
-    state: latest
-  tags: update
-
 - name: Set hostname based on cluster_nodes definition
-  hostname:
+  ansible.builtin.hostname:
     name: "{{ item.hostname }}"
-  when: inventory_hostname == item.hostname
-  loop: "{{ cluster_nodes }}"
+  when:
+    - infra__redhat_cluster_set_cluster_hostname | bool
+    - inventory_hostname == item.hostname
+  loop: "{{ infra__redhat_cluster_nodes }}"
   tags: hostname
 
-- name: Configure /etc/hosts
-  template:
-    src: hosts.j2
-    dest: /etc/hosts
-    owner: root
-    group: root
-    mode: '0644'
+- name: Add cluster nodes to /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "^{{ item.ip }}\\s+"
+    line: "{{ item.ip }} {{ item.hostname }}"
+    state: present
+  with_items: "{{ infra__redhat_cluster_nodes }}"
+  tags: hosts
+
+- name: Add virtual IP to /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "^{{ infra__redhat_cluster_virtual_ip }}\\s+"
+    line: "{{ infra__redhat_cluster_virtual_ip }} {{ infra__redhat_cluster_dns_for_virtual_ip }}"
+    state: present
   tags: hosts
 
 - name: Configure firewall
-  firewalld:
+  ansible.builtin.firewalld:
     service: "{{ item }}"
     permanent: yes
     state: enabled
-  with_items: "{{ firewall_services }}"
+  with_items: "{{ infra__redhat_cluster_firewall_services }}"
   tags: firewall
 
 - name: Reload firewall
-  command: firewall-cmd --reload
+  ansible.builtin.command: firewall-cmd --reload
   changed_when: false
   tags: firewall
 
 - name: Create mount point directory
-  file:
-    path: "{{ mount_point }}"
+  ansible.builtin.file:
+    path: "{{ infra__redhat_cluster_mount_point }}"
     state: directory
     mode: '0755'
   tags: nfs
 
 - name: Create temporary mount point for NFS setup
-  file:
+  ansible.builtin.file:
     path: "/tmp/nfs_temp_mount"
     state: directory
     mode: '0755'
   run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
   tags: watchdog
+
+- name: Enable high availability repository
+  ansible.builtin.command: subscription-manager repos --enable "rhel-9-for-x86_64-highavailability-rpms"
+  register: repo_result
+  changed_when: repo_result.rc != 0
+  when:
+    - ansible_distribution == "RedHat"
+    - ansible_distribution_major_version == "9"
+  tags: high-availability
+  
