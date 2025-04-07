@@ -1,0 +1,130 @@
+#!/bin/bash
+#
+# watchdog-reboot-control.sh
+# This script is called by watchdog before rebooting the system
+# Verifies if the maximum number of allowed reboots has been exceeded
+#
+
+# Configuration
+MAX_REBOOTS=3                                   # Maximum number of allowed reboots
+REBOOT_COUNT_FILE="/var/lib/watchdog/reboot_count"   # File to count reboots
+REBOOT_TIMESTAMP_FILE="/var/lib/watchdog/last_reboot_time"  # Last reboot timestamp
+REBOOT_REASON_FILE="/var/lib/watchdog/last_reboot_reason"   # Last reboot reason
+LOG_FILE="/var/log/watchdog-reboot-control.log"     # Action log
+
+# Ensure directory exists
+mkdir -p /var/lib/watchdog
+
+# Logging function
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
+  logger -t watchdog-reboot-control -p daemon.warning "$1"
+}
+
+# Get current count
+get_count() {
+  if [ -f "$REBOOT_COUNT_FILE" ]; then
+    cat "$REBOOT_COUNT_FILE"
+  else
+    echo "0" > "$REBOOT_COUNT_FILE"
+    echo "0"
+  fi
+}
+
+# Increment counter
+increment_count() {
+  local reason="$1"
+  local count
+
+  if [ -f "$REBOOT_COUNT_FILE" ]; then
+    count=$(cat "$REBOOT_COUNT_FILE")
+    # Validate it's a number
+    if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+      count=0
+    fi
+    count=$((count + 1))
+  else
+    count=1
+  fi
+
+  echo "$count" > "$REBOOT_COUNT_FILE"
+  date +%s > "$REBOOT_TIMESTAMP_FILE"
+  echo "$reason" > "$REBOOT_REASON_FILE"
+
+  log "Increased reboot counter to $count of $MAX_REBOOTS (Reason: $reason)"
+}
+
+# Check if should continue with reboot
+should_reboot() {
+  local count=$(get_count)
+  if [ "$count" -lt "$MAX_REBOOTS" ]; then
+    return 0  # Yes, allow reboot
+  else
+    return 1  # No, limit reboot
+  fi
+}
+
+# Determine reboot reason
+determine_reason() {
+  # Check watchdog file
+  if [ -f "{{ infra__redhat_cluster_watchdog_heartbeat_file }}" ]; then
+    last_mod=$(stat -c %Y "{{ infra__redhat_cluster_watchdog_heartbeat_file }}" 2>/dev/null)
+    now=$(date +%s)
+    age=$((now - last_mod))
+
+    if [ "$age" -gt "{{ infra__redhat_cluster_watchdog_heartbeat_change }}" ]; then
+      echo "Heartbeat file not updated in $age seconds"
+      return
+    fi
+  fi
+
+  # Check NFS
+  if ! findmnt -t nfs,nfs4 "{{ infra__redhat_cluster_watchdog_nfs_witness_dir }}" > /dev/null 2>&1; then
+    echo "NFS not mounted"
+    return
+  fi
+
+  # If we can't determine, show a generic message
+  echo "Watchdog error (unknown cause)"
+}
+
+# Main code
+log "Starting reboot control script"
+
+# Determine reason
+reason=$(determine_reason)
+log "Determined reason: $reason"
+
+# Verify if we should allow the reboot
+if should_reboot; then
+  # Increment counter and allow reboot
+  increment_count "$reason"
+  log "Allowing reboot ($count/$MAX_REBOOTS)"
+  exit 0  # Exit successfully, allowing watchdog to continue with reboot
+else
+  # Don't allow reboot
+  log "REBOOT BLOCKED: Exceeded limit of $MAX_REBOOTS attempts"
+  log "Manual intervention required - Problem: $reason"
+
+  # Create indicator file for administrator
+  echo "Automatic reboot cycle has been stopped after $MAX_REBOOTS attempts. Last reason: $reason" > "/var/lib/watchdog/reboot_blocked"
+  chmod 644 "/var/lib/watchdog/reboot_blocked"
+
+  # Try to send email to administrator if mail is available
+  if command -v mail > /dev/null 2>&1; then
+    echo "Server $HOSTNAME has stopped automatic reboots after $MAX_REBOOTS attempts. Last reason: $reason" | mail -s "ALERT: Reboots blocked on $HOSTNAME" root
+  fi
+
+  # If systemd-cat is available, send critical message to journald
+  if command -v systemd-cat > /dev/null 2>&1; then
+    echo "Automatic reboots blocked after $MAX_REBOOTS attempts. Reason: $reason" | systemd-cat -p crit -t watchdog-blocked
+  fi
+
+  # Although we don't allow reboot, we must exit with code 0 to prevent watchdog
+  # from taking more drastic actions
+  exit 0
+fi
+
+# If we get here, we're within the allowed limit and the script ends
+# allowing watchdog to continue with its normal action
+exit 0
