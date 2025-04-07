@@ -1,44 +1,63 @@
 ---
-- name: Set password for hacluster user
-  user:
-    name: "{{ cluster_user }}"
-    password: "{{ cluster_password | string | password_hash('sha512') }}"
+- name: Check if hacluster user exists
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ infra__redhat_cluster_user }}"
+  register: user_exists
+  check_mode: false
+  changed_when: false
+  tags: users
+
+- name: Create hacluster user if not exists
+  ansible.builtin.user:
+    name: "{{ infra__redhat_cluster_user }}"
+    password: "{{ infra__redhat_cluster_password | string | password_hash('sha512') }}"
     state: present
+  when: user_exists.ansible_facts.getent_passwd is not defined or infra__redhat_cluster_user not in user_exists.ansible_facts.getent_passwd
+  tags: users
+
+- name: Set hacluster password for existing user
+  ansible.builtin.shell: echo "{{ infra__redhat_cluster_password }}" | passwd --stdin {{ infra__redhat_cluster_user }}
+  register: set_password
+  changed_when: set_password.rc == 0
+  when: user_exists.ansible_facts.getent_passwd is defined and infra__redhat_cluster_user in user_exists.ansible_facts.getent_passwd
   tags: users
 
 - name: Authenticate nodes
-  shell: pcs host auth {% for node in cluster_nodes %}{{ node.hostname }} {% endfor %} -u {{ cluster_user }} -p {{ cluster_password }}
+  ansible.builtin.shell: pcs host auth {{ infra__redhat_cluster_nodes | map(attribute='hostname') | join(' ') }} -u {{ infra__redhat_cluster_user }} -p {{ infra__redhat_cluster_password }}
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
+  register: auth_result
+  changed_when: auth_result.rc == 0
   run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
-  changed_when: false
   tags: auth
 
 - name: Setup cluster
-  shell: pcs cluster setup {{ cluster_name }} {% for node in cluster_nodes %}{{ node.hostname }} {% endfor %}
+  ansible.builtin.shell: pcs cluster setup {{ infra__redhat_cluster_name }} {% for node in infra__redhat_cluster_nodes %}{{ node.hostname }} {% endfor %}
   run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
   args:
     creates: /etc/corosync/corosync.conf
   tags: setup
 
 - name: Start cluster on all nodes
-  shell: pcs cluster start --all
+  ansible.builtin.shell: pcs cluster start --all
   run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
   changed_when: false
   tags: start
 
 - name: Enable cluster on all nodes
-  shell: pcs cluster enable --all
+  ansible.builtin.shell: pcs cluster enable --all
   run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
   changed_when: false
   tags: enable
 
 - name: Set no-quorum-policy
-  shell: pcs property set no-quorum-policy=ignore
+  ansible.builtin.shell: pcs property set no-quorum-policy=ignore
   run_once: true
-  delegate_to: "{{ cluster_nodes[0].hostname }}"
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
   changed_when: false
   tags: properties
-
+  changed_when: false
+  tags: properties
