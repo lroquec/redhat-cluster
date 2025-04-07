@@ -1,17 +1,30 @@
 ---
+# Default packages
+infra__redhat_cluster_required_packages:
+  - pcs
+  - pacemaker
+  - resource-agents
+  - fence-agents-all
+  - nfs-utils
+  - watchdog
+  - nmap-ncat
+  - kexec-tools
+  - fence-agents-kdump
+  - policycoreutils-python-utils
+  - libselinux-utils
+  - util-linux
+
+# Change hostname
+infra__redhat_cluster_set_cluster_hostname: false
+
 # Cluster configuration
-cluster_name: "ha_cluster"
-cluster_user: "hacluster"
-cluster_password: !vault |
-          $ANSIBLE_VAULT;1.1;AES256
-          36646466383430396566333265636261656432373463373639303463343363333235363131613131
-          6462333862383762353662616636353030333031613934320a356461623031366434383065343066
-          31353162323665316362396365613932623336326263653864633862373732306663666232363633
-          3061336661643463320a616436316337333937306632333633386464326238643933623239373565
-          31383162323532353436656230396534313466363133356339393136336139383335
+infra__redhat_cluster_name: "ha_cluster"
+infra__redhat_cluster_user: "hacluster"
+infra__redhat_cluster_password: "jbwvuvnqhqTFTwcq283bk"  # Change to a secure password using vault
+infra__redhat_cluster_update_password: false
 
 # Cluster nodes
-cluster_nodes:
+infra__redhat_cluster_nodes:
   - name: "node1"
     hostname: "node1"
     ip: "192.168.6.45"
@@ -21,44 +34,38 @@ cluster_nodes:
     ip: "192.168.6.46"
 
 # Floating IP
-virtual_ip: "192.168.6.37"
-virtual_ip_cidr: "22"
-virtual_ip_interface: "ens18"  # Change to the appropriate interface
-dns_for_virtual_ip: "test.example.com"
+infra__redhat_cluster_virtual_ip: "192.168.6.37"
+infra__redhat_cluster_virtual_ip_cidr: "22"
+infra__redhat_cluster_virtual_ip_interface: "ens18"  # Change to the appropriate interface
+infra__redhat_cluster_dns_for_virtual_ip: "test.example.com"
 
 # NFS configuration
-nfs_server: "192.168.4.36"
-nfs_share: "/var/lib/vz/nfs-export"
-mount_point: "/opt/nfs-shared"
+infra__redhat_cluster_nfs_server: "192.168.4.36"
+infra__redhat_cluster_nfs_share: "/var/lib/vz/nfs-export"
+infra__redhat_cluster_mount_point: "/opt/nfs-shared"
 
 # Watchdog NFS arbitrator configuration
-watchdog_nfs_witness_dir: "/opt/nfs-witness"
-watchdog_active_nfs_failure_threshold: 60    # In seconds
-watchdog_standby_nfs_failure_threshold: 180  # In seconds
-watchdog_state_threshold: 60                 # In seconds
-watchdog_arbitrator: "192.168.4.24"   # Hostname or IP
+infra__redhat_cluster_watchdog_enabled_by_default: false
+infra__redhat_cluster_watchdog_nfs_witness_dir: "/opt/nfs-witness"
+infra__redhat_cluster_watchdog_active_nfs_failure_threshold: 60  # In seconds
+infra__redhat_cluster_watchdog_standby_nfs_failure_threshold: 180  # In seconds
+infra__redhat_cluster_watchdog_state_threshold: 60  # In seconds
+infra__redhat_cluster_watchdog_arbitrator: "192.168.4.24"  # Hostname or IP
 
 # Hardware watchdog configuration
-watchdog_device: "/dev/watchdog"
-watchdog_interval: "10"
-watchdog_heartbeat_file: "/var/run/arbitrator-heartbeat"
-watchdog_heartbeat_change: "180"  # 3 minutes in seconds for reboot trigger
+infra__redhat_cluster_watchdog_device: "/dev/watchdog"
+infra__redhat_cluster_watchdog_interval: "10"
+infra__redhat_cluster_watchdog_heartbeat_file: "/var/run/arbitrator-heartbeat"
+infra__redhat_cluster_watchdog_heartbeat_change: "180"  # 3 minutes in seconds for reboot trigger
 
 # Resource monitoring configuration
-resource_monitor_interval: "30s"
-ip_monitor_interval: "10s"
-fs_monitor_interval: "20s"
+infra__redhat_cluster_resource_monitor_interval: "30s"
+infra__redhat_cluster_ip_monitor_interval: "10s"
+infra__redhat_cluster_fs_monitor_interval: "20s"
 
 # Ports to open in the firewall
-firewall_services:
+infra__redhat_cluster_firewall_services:
   - high-availability
-  - https
 
-# Example service configuration
-app_service_name: "myapp"
-app_user: "appuser"
-app_group: "appgroup"
-app_start_script: "/opt/myapp/bin/start.sh"
-app_stop_script: "/opt/myapp/bin/stop.sh"
-app_status_script: "/opt/myapp/bin/status.sh"
-app_pid_file: "/var/run/myapp.pid"
+# Cluster services
+infra__redhat_cluster_services_list: []
