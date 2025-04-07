@@ -1,29 +1,18 @@
 ---
 - name: Install required packages
-  dnf:
-    name:
-    - pcs
-    - pacemaker
-    - resource-agents
-    - fence-agents-all
-    - nfs-utils
-    - watchdog
-    - nmap-ncat
-    - kexec-tools
-    - policycoreutils-python-utils
-    - libselinux-utils
-    - util-linux
+  ansible.builtin.dnf:
+    name: "{{ infra__redhat_cluster_required_packages }}"
     state: present
   tags: packages
 
 - name: Load softdog module
-  modprobe:
+  ansible.builtin.modprobe:
     name: softdog
     state: present
   tags: watchdog
 
 - name: Ensure softdog module loads at boot
-  copy:
+  ansible.builtin.copy:
     content: "softdog\n"
     dest: /etc/modules-load.d/softdog.conf
     owner: root
@@ -32,9 +21,9 @@
   tags: watchdog
 
 - name: Enable and start pcsd service
-  systemd:
+  ansible.builtin.systemd:
     name: pcsd
     enabled: yes
     state: started
   tags: services
-
+  
