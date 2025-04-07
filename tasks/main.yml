@@ -1,36 +1,52 @@
 ---
+- name: Check infra__redhat_cluster_password is defined
+  ansible.builtin.assert:
+    that:
+      - infra__redhat_cluster_password is defined
+    fail_msg: "'infra__redhat_cluster_password' should be defined as ansible vault encrypted"
+    success_msg: "'infra__redhat_cluster_password' is defined"
+
 - name: Include preparation tasks
-  include_tasks: prepare.yml
+  ansible.builtin.include_tasks: prepare.yml
   tags: prepare
 
 - name: Include installation tasks
-  include_tasks: install.yml
+  ansible.builtin.include_tasks: install.yml
   tags: install
 
 - name: Include cluster configuration tasks
-  include_tasks: configure_cluster.yml
+  ansible.builtin.include_tasks: configure_cluster.yml
   tags: configure
 
 - name: Include STONITH configuration tasks
-  include_tasks: configure_stonith.yml
+  ansible.builtin.include_tasks: configure_stonith.yml
   tags: stonith
 
 - name: Include watchdog configuration tasks
-  include_tasks: configure_watchdog.yml
+  ansible.builtin.include_tasks: configure_watchdog.yml
   tags: watchdog
 
 - name: Include resource configuration tasks
-  include_tasks: configure_resources.yml
+  ansible.builtin.include_tasks: configure_resources.yml
   tags: resources
 
-# - name: Include test service tasks
-#   include_tasks: test_service.yml
-#   tags: test_service
+- name: Include reboot control tasks
+  ansible.builtin.include_tasks: configure_reboot_control.yml
+  tags: reboot_control
 
 - name: Include diagnostic tools
-  include_tasks: diagnostics.yml
+  ansible.builtin.include_tasks: diagnostics.yml
   tags: diagnostics
 
 - name: Include validation tasks
-  include_tasks: validate.yml
+  ansible.builtin.include_tasks: validate.yml
   tags: validate
+
+- name: Include cluster test tasks
+  ansible.builtin.include_tasks: deploy_cluster_test.yml
+  tags: cluster_test
+
+- name: Include service tasks if the services list is not empty
+  include_tasks: configure_systemd_services.yml
+  when: infra__redhat_cluster_services_list is defined and infra__redhat_cluster_services_list | length > 0
+  tags: services
