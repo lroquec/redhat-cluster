@@ -1,0 +1,69 @@
+---
+- name: Ensure services are disabled in the OS
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: no
+  loop: "{{ infra__redhat_cluster_services_list }}"
+  loop_control:
+    label: "{{ item }}"
+  tags: services
+
+- name: Create service resources in the cluster
+  ansible.builtin.shell: >
+    pcs resource create {{ item }} systemd:{{ item }}
+    op monitor interval={{ infra__redhat_cluster_resource_monitor_interval }}
+  run_once: true
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
+  register: create_service
+  failed_when: create_service.rc != 0 and "already exists" not in create_service.stderr
+  changed_when: create_service.rc == 0
+  loop: "{{ infra__redhat_cluster_services_list }}"
+  loop_control:
+    label: "{{ item }}"
+  tags: services
+
+- name: Set sequential order constraints for services
+  ansible.builtin.shell: >
+    pcs constraint order {{ 'fs_shared' if item_index == 0 else infra__redhat_cluster_services_list[item_index - 1] }}
+    then {{ infra__redhat_cluster_services_list[item_index] }} --force
+  run_once: true
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
+  changed_when: false
+  loop: "{{ range(0, infra__redhat_cluster_services_list | length) | list }}"
+  loop_control:
+    index_var: item_index
+    label: "{{ infra__redhat_cluster_services_list[item_index] }}"
+  tags: services
+
+- name: Set sequential colocation constraints for services
+  ansible.builtin.shell: >
+    pcs constraint colocation add {{ infra__redhat_cluster_services_list[item_index] }}
+    with {{ 'fs_shared' if item_index == 0 else infra__redhat_cluster_services_list[item_index - 1] }}
+    INFINITY --force
+  run_once: true
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
+  changed_when: false
+  loop: "{{ range(0, infra__redhat_cluster_services_list | length) | list }}"
+  loop_control:
+    index_var: item_index
+    label: "{{ infra__redhat_cluster_services_list[item_index] }}"
+  tags: services
+
+- name: Enable service resources in cluster
+  ansible.builtin.shell: pcs resource enable {{ item }}
+  run_once: true
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
+  ignore_errors: true
+  loop: "{{ infra__redhat_cluster_services_list }}"
+  loop_control:
+    label: "{{ item }}"
+  tags: services
+
+# Cleanup resources
+- name: Cleanup resources
+  ansible.builtin.shell: pcs resource cleanup
+  run_once: true
+  delegate_to: "{{ infra__redhat_cluster_nodes[0].hostname }}"
+  ignore_errors: true
+  tags: services
+  
