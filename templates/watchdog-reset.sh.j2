@@ -1,0 +1,106 @@
+#!/bin/bash
+#
+# watchdog-reset.sh
+# This script allows resetting the reboot counter when the system
+# is working correctly or after fixing a problem
+#
+
+# Configuration
+REBOOT_COUNT_FILE="/var/lib/watchdog/reboot_count"
+REBOOT_TIMESTAMP_FILE="/var/lib/watchdog/last_reboot_time"
+REBOOT_REASON_FILE="/var/lib/watchdog/last_reboot_reason"
+REBOOT_BLOCKED_FILE="/var/lib/watchdog/reboot_blocked"
+HEALTHY_STATE_FILE="/var/lib/watchdog/healthy_since"
+LOG_FILE="/var/log/watchdog-reboot-control.log"
+
+# Logging function
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG_FILE"
+  logger -t watchdog-reset -p daemon.notice "$1"
+}
+
+# Verify running as root
+if [ "$(id -u)" -ne 0 ]; then
+  echo "This script must be run as root"
+  exit 1
+fi
+
+# Show current status
+show_status() {
+  echo "=== Reboot Control Status ==="
+
+  if [ -f "$REBOOT_COUNT_FILE" ]; then
+    echo "Current counter: $(cat $REBOOT_COUNT_FILE)"
+  else
+    echo "Current counter: 0"
+  fi
+
+  if [ -f "$REBOOT_TIMESTAMP_FILE" ]; then
+    last_time=$(cat $REBOOT_TIMESTAMP_FILE)
+    echo "Last reboot: $(date -d @$last_time)"
+  else
+    echo "Last reboot: Never"
+  fi
+
+  if [ -f "$REBOOT_REASON_FILE" ]; then
+    echo "Last reboot reason: $(cat $REBOOT_REASON_FILE)"
+  else
+    echo "Last reboot reason: N/A"
+  fi
+
+  if [ -f "$REBOOT_BLOCKED_FILE" ]; then
+    echo "ALERT: Reboots blocked: $(cat $REBOOT_BLOCKED_FILE)"
+  else
+    echo "Block status: Not blocked"
+  fi
+
+  if [ -f "$HEALTHY_STATE_FILE" ]; then
+    healthy_since=$(cat $HEALTHY_STATE_FILE)
+    now=$(date +%s)
+    duration=$((now - healthy_since))
+    hours=$((duration / 3600))
+    minutes=$(((duration % 3600) / 60))
+    echo "System healthy since: $(date -d @$healthy_since) ($hours hours, $minutes minutes)"
+  else
+    echo "Healthy status: Not recorded"
+  fi
+}
+
+# Reset counter
+reset_counter() {
+  # Create backup of old files
+  if [ -f "$REBOOT_COUNT_FILE" ]; then
+    cp "$REBOOT_COUNT_FILE" "$REBOOT_COUNT_FILE.bak"
+  fi
+
+  echo "0" > "$REBOOT_COUNT_FILE"
+  date +%s > "$HEALTHY_STATE_FILE"
+
+  # Remove block file if it exists
+  if [ -f "$REBOOT_BLOCKED_FILE" ]; then
+    rm -f "$REBOOT_BLOCKED_FILE"
+  fi
+
+  log "Reboot counter manually reset by $(whoami)"
+  echo "Reboot counter successfully reset."
+  echo "The system will now allow automatic reboots if necessary."
+}
+
+# Options menu
+case "$1" in
+  status)
+    show_status
+    ;;
+  reset)
+    reset_counter
+    ;;
+  *)
+    echo "Usage: $0 {status|reset}"
+    echo ""
+    echo "  status  - Shows current reboot counter status"
+    echo "  reset   - Resets the reboot counter and unblocks the system"
+    exit 1
+    ;;
+esac
+
+exit 0
