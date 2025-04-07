@@ -1,9 +1,14 @@
-watchdog-device = {{ watchdog_device }}
-interval = {{ watchdog_interval }}
+watchdog-device = {{ infra__redhat_cluster_watchdog_device }}
+interval = {{ infra__redhat_cluster_watchdog_interval }}
 realtime = yes
 priority = 1
 pidfile = /run/watchdog.pid
 
 # Monitor arbitrator heartbeat file for changes
-file = {{ watchdog_heartbeat_file }}
-change = {{ watchdog_heartbeat_change }}
+file = {{ infra__redhat_cluster_watchdog_heartbeat_file }}
+change = {{ infra__redhat_cluster_watchdog_heartbeat_change }}
+
+# Add a controlled repair script that will be executed before rebooting
+# This will increment our reboot counter and check limits
+repair-binary = /usr/local/bin/watchdog-reboot-control.sh
+repair-timeout = 60
