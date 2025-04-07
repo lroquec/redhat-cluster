@@ -42,10 +42,6 @@
   ansible.builtin.include_tasks: validate.yml
   tags: validate
 
-- name: Include cluster test tasks
-  ansible.builtin.include_tasks: deploy_cluster_test.yml
-  tags: cluster_test
-
 - name: Include service tasks if the services list is not empty
   include_tasks: configure_systemd_services.yml
   when: infra__redhat_cluster_services_list is defined and infra__redhat_cluster_services_list | length > 0
