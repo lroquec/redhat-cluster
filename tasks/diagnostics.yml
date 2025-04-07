@@ -1,13 +1,13 @@
 ---
 - name: Create diagnostics directory
-  file:
+  ansible.builtin.file:
     path: /var/log/cluster_diagnostics
     state: directory
     mode: '0755'
   tags: diagnostics
 
 - name: Create extended watchdog logger file
-  copy:
+  ansible.builtin.copy:
     dest: /usr/local/bin/watchdog-logger.sh
     content: |
       #!/bin/bash
@@ -76,7 +76,7 @@
   tags: diagnostics
 
 - name: Create systemd service for watchdog diagnostics
-  copy:
+  ansible.builtin.copy:
     dest: /etc/systemd/system/watchdog-diagnostics.service
     content: |
       [Unit]
@@ -95,7 +95,7 @@
   tags: diagnostics
 
 - name: Create systemd timer for watchdog diagnostics
-  copy:
+  ansible.builtin.copy:
     dest: /etc/systemd/system/watchdog-diagnostics.timer
     content: |
       [Unit]
@@ -113,19 +113,19 @@
   tags: diagnostics
 
 - name: Reload systemd to pick up new service and timer
-  systemd:
+  ansible.builtin.systemd:
     daemon_reload: yes
   tags: diagnostics
 
 - name: Enable and start watchdog diagnostics timer
-  systemd:
+  ansible.builtin.systemd:
     name: watchdog-diagnostics.timer
     enabled: yes
     state: started
   tags: diagnostics
 
 - name: Run watchdog diagnostics immediately
-  systemd:
+  ansible.builtin.systemd:
     name: watchdog-diagnostics.service
     state: started
   tags: diagnostics
